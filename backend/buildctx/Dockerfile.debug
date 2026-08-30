@@ -1,0 +1,10 @@
+FROM golang:1.26.5-alpine AS builder
+WORKDIR /app
+RUN apk add --no-cache git
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN echo "=== CHECK: migrations/001_init.sql ===" && sha256sum migrations/001_init.sql && \
+    echo "=== CHECK: migrations dir count ===" && ls migrations/*.sql | wc -l && \
+    go build -tags="embed timetzdata" -ldflags="-s -w" -o main ./cmd/server && \
+    echo "=== BUILT OK ==="

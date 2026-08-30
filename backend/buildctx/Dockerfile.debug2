@@ -1,0 +1,10 @@
+FROM golang:1.26.5-alpine AS builder
+WORKDIR /app
+RUN apk add --no-cache git
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN rm -rf /root/.cache/go-build && mkdir -p /root/.cache/go-build && \
+    go clean -cache && \
+    go build -tags="embed timetzdata" -ldflags="-s -w" -o main ./cmd/server && \
+    echo "=== BUILT WITH CLEAN CACHE ==="

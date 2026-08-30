@@ -1,0 +1,12 @@
+FROM golang:1.26.5-alpine AS builder
+WORKDIR /app
+RUN apk add --no-cache git
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN go build -tags="embed timetzdata" -o /tool ./cmd/embed-checksum && \
+    /tool | grep "^001_init.sql" && \
+    go build -tags="embed timetzdata" -o /server ./cmd/server && \
+    echo "=== SERVER BUILT ===" && \
+    go build -tags="embed timetzdata" -o /tool2 ./cmd/embed-checksum && \
+    /tool2 | grep "^001_init.sql"
