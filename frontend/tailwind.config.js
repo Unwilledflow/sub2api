@@ -5,47 +5,47 @@ export default {
   theme: {
     extend: {
       colors: {
-        // 主色调 - 雾蓝/宝石蓝，保持清爽但提升层次与质感
+        // 主色调 - 薰衣草紫/雅致灰紫（基于角色眼睛和发饰配色）
         primary: {
-          50: '#eff6ff',
-          100: '#dbeafe',
-          200: '#bfdbfe',
-          300: '#93c5fd',
-          400: '#60a5fa',
-          500: '#3b82f6',
-          600: '#2563eb',
-          700: '#1d4ed8',
-          800: '#1e40af',
-          900: '#1e3a8a',
-          950: '#172554'
+          50: '#f8f7fc',
+          100: '#f0eef8',
+          200: '#e8e3f5',
+          300: '#d4c9ed',
+          400: '#b8a8d8',
+          500: '#9d8bc4',
+          600: '#8570af',
+          700: '#6d5a94',
+          800: '#584878',
+          900: '#463a5f',
+          950: '#2e2540'
         },
-        // 辅助色 - 深蓝灰
+        // 辅助色 - 冷灰蓝（基于角色头发和西装色调）
         accent: {
-          50: '#f8fafc',
-          100: '#f1f5f9',
-          200: '#e2e8f0',
-          300: '#cbd5e1',
-          400: '#94a3b8',
-          500: '#64748b',
-          600: '#475569',
-          700: '#334155',
-          800: '#1e293b',
-          900: '#0f172a',
-          950: '#020617'
+          50: '#f7f8fa',
+          100: '#eef0f4',
+          200: '#dde1e8',
+          300: '#c4cad6',
+          400: '#9ea7b8',
+          500: '#7a8599',
+          600: '#5f6a7d',
+          700: '#4d5667',
+          800: '#3f4451',
+          900: '#2d323d',
+          950: '#1a1d26'
         },
-        // 深色模式背景
+        // 深色模式背景（深邃优雅的石板灰）
         dark: {
-          50: '#f8fafc',
-          100: '#f1f5f9',
-          200: '#e2e8f0',
-          300: '#cbd5e1',
-          400: '#94a3b8',
-          500: '#64748b',
-          600: '#475569',
-          700: '#334155',
-          800: '#1e293b',
-          900: '#0f172a',
-          950: '#020617'
+          50: '#f7f8fa',
+          100: '#eef0f4',
+          200: '#dde1e8',
+          300: '#c4cad6',
+          400: '#9ea7b8',
+          500: '#7a8599',
+          600: '#5f6a7d',
+          700: '#4d5667',
+          800: '#3f4451',
+          900: '#2d323d',
+          950: '#1a1d26'
         }
       },
       fontFamily: {
@@ -67,20 +67,20 @@ export default {
       boxShadow: {
         glass: '0 8px 32px rgba(0, 0, 0, 0.08)',
         'glass-sm': '0 4px 16px rgba(0, 0, 0, 0.06)',
-        glow: '0 0 20px rgba(59, 130, 246, 0.22)',
-        'glow-lg': '0 0 40px rgba(37, 99, 235, 0.28)',
+        glow: '0 0 20px rgba(157, 139, 196, 0.25)',
+        'glow-lg': '0 0 40px rgba(133, 112, 175, 0.32)',
         card: '0 1px 3px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.06)',
-        'card-hover': '0 10px 40px rgba(0, 0, 0, 0.08)',
+        'card-hover': '0 10px 40px rgba(157, 139, 196, 0.12)',
         'inner-glow': 'inset 0 1px 0 rgba(255, 255, 255, 0.1)'
       },
       backgroundImage: {
         'gradient-radial': 'radial-gradient(var(--tw-gradient-stops))',
-        'gradient-primary': 'linear-gradient(135deg, #60a5fa 0%, #2563eb 55%, #1d4ed8 100%)',
-        'gradient-dark': 'linear-gradient(135deg, #1e293b 0%, #0f172a 100%)',
+        'gradient-primary': 'linear-gradient(135deg, #b8a8d8 0%, #9d8bc4 55%, #8570af 100%)',
+        'gradient-dark': 'linear-gradient(135deg, #3f4451 0%, #2d323d 100%)',
         'gradient-glass':
           'linear-gradient(135deg, rgba(255,255,255,0.1) 0%, rgba(255,255,255,0.05) 100%)',
         'mesh-gradient':
-          'radial-gradient(at 40% 20%, rgba(96, 165, 250, 0.16) 0px, transparent 50%), radial-gradient(at 80% 0%, rgba(14, 165, 233, 0.10) 0px, transparent 50%), radial-gradient(at 0% 50%, rgba(37, 99, 235, 0.08) 0px, transparent 50%)'
+          'radial-gradient(at 40% 20%, rgba(184, 168, 216, 0.16) 0px, transparent 50%), radial-gradient(at 80% 0%, rgba(157, 139, 196, 0.10) 0px, transparent 50%), radial-gradient(at 0% 50%, rgba(133, 112, 175, 0.08) 0px, transparent 50%)'
       },
       animation: {
         'fade-in': 'fadeIn 0.3s ease-out',
@@ -118,8 +118,8 @@ export default {
           '100%': { backgroundPosition: '200% 0' }
         },
         glow: {
-          '0%': { boxShadow: '0 0 20px rgba(59, 130, 246, 0.20)' },
-          '100%': { boxShadow: '0 0 30px rgba(37, 99, 235, 0.32)' }
+          '0%': { boxShadow: '0 0 20px rgba(157, 139, 196, 0.22)' },
+          '100%': { boxShadow: '0 0 30px rgba(133, 112, 175, 0.35)' }
         }
       },
       backdropBlur: {

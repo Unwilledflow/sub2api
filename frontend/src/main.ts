@@ -6,6 +6,7 @@ import i18n, { initI18n } from './i18n'
 import { useAppStore } from '@/stores/app'
 import { updateFavicon } from '@/utils/branding'
 import { isIOSDevice } from '@/utils/device'
+import { initTheme } from '@/composables/useCharacterTheme'
 import './style.css'
 import './styles/design-system.css'
 import './styles/macos-liquid-glass.css'
@@ -53,6 +54,9 @@ async function bootstrap() {
   initThemeClass()
   initIOSViewportZoomFix()
   initChunkReloadGuard()
+
+  // 初始化角色动态主题系统
+  initTheme()
 
   const app = createApp(App)
   const pinia = createPinia()
