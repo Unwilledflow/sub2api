@@ -1,34 +1,40 @@
 <template>
-  <div class="space-y-5">
+  <div class="space-y-6">
+    <!-- 英雄区：角色展示 + 欢迎信息 (仅独立页面显示) -->
+    <PlazaHeroSection v-if="!embedded" />
+
     <!-- 页头(独立形态下展示标题;后台形态 AppHeader 已有页面标题) -->
-    <div v-if="!embedded">
-      <h1 class="text-2xl font-bold tracking-tight text-gray-900 dark:text-white sm:text-3xl">{{ t('modelPlaza.title') }}</h1>
-      <p class="mt-1.5 text-sm text-gray-500 dark:text-dark-400">{{ t('modelPlaza.description') }}</p>
+    <div v-if="!embedded" class="space-y-2">
+      <h1 class="bg-gradient-to-r from-gray-900 to-gray-700 bg-clip-text text-3xl font-bold tracking-tight text-transparent dark:from-white dark:to-gray-300 sm:text-4xl">{{ t('modelPlaza.title') }}</h1>
+      <p class="text-sm leading-relaxed text-gray-600 dark:text-dark-300">{{ t('modelPlaza.description') }}</p>
     </div>
 
     <!-- 全局价格说明(管理员配置,Markdown) -->
     <div
       v-if="descriptionHtml"
-      class="plaza-description rounded-2xl border border-gray-100 bg-white px-5 py-4 text-sm shadow-card dark:border-dark-700/50 dark:bg-dark-800/50"
+      class="plaza-description rounded-2xl border border-primary-100/60 bg-gradient-to-br from-primary-50/50 to-white px-6 py-5 text-sm shadow-sm dark:border-primary-900/30 dark:from-primary-950/20 dark:to-dark-800/50"
       v-html="descriptionHtml"
     ></div>
 
     <!-- 未登录提示 -->
-    <p
+    <div
       v-if="!isAuthenticated"
-      class="flex items-center gap-1.5 text-xs text-gray-400 dark:text-dark-500"
+      class="flex items-center gap-2 rounded-xl border border-accent-200/60 bg-accent-50/50 px-4 py-3 text-xs text-accent-700 dark:border-accent-800/40 dark:bg-accent-900/20 dark:text-accent-300"
     >
-      <Icon name="infoCircle" size="xs" class="h-3.5 w-3.5" />
-      {{ t('modelPlaza.anonymousHint') }}
-    </p>
+      <Icon name="infoCircle" size="xs" class="h-4 w-4 flex-shrink-0" />
+      <span>{{ t('modelPlaza.anonymousHint') }}</span>
+    </div>
 
     <!-- 加载/错误/空 -->
-    <div v-if="loading" class="flex min-h-[240px] items-center justify-center">
-      <div class="h-8 w-8 animate-spin rounded-full border-2 border-primary-600/25 border-t-primary-600 dark:border-primary-400/25 dark:border-t-primary-400"></div>
+    <div v-if="loading" class="flex min-h-[280px] items-center justify-center">
+      <div class="relative">
+        <div class="h-10 w-10 animate-spin rounded-full border-3 border-primary-200/40 border-t-primary-600 dark:border-primary-900/40 dark:border-t-primary-400"></div>
+        <div class="absolute inset-0 h-10 w-10 animate-pulse rounded-full bg-primary-500/10"></div>
+      </div>
     </div>
     <div
       v-else-if="error"
-      class="rounded-2xl border border-red-200 bg-red-50 px-5 py-8 text-center text-sm text-red-600 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300"
+      class="rounded-2xl border border-red-200/80 bg-gradient-to-br from-red-50 to-red-100/50 px-6 py-10 text-center text-sm font-medium text-red-700 shadow-sm dark:border-red-500/30 dark:from-red-950/30 dark:to-red-900/20 dark:text-red-300"
     >
       {{ t('modelPlaza.loadFailed') }}
     </div>
@@ -49,12 +55,12 @@
       />
 
       <!-- 分组分节的模型清单(默认按生效倍率升序) -->
-      <div v-if="filteredGroups.length > 0" class="space-y-5">
+      <div v-if="filteredGroups.length > 0" class="space-y-6">
         <PlazaGroupSection v-for="g in filteredGroups" :key="g.id" :group="g" />
       </div>
       <div
         v-else
-        class="rounded-2xl border border-dashed border-gray-300 px-5 py-12 text-center text-sm text-gray-500 dark:border-dark-600 dark:text-dark-400"
+        class="rounded-2xl border border-dashed border-gray-300 bg-gray-50/50 px-6 py-16 text-center text-sm text-gray-500 dark:border-dark-600 dark:bg-dark-900/30 dark:text-dark-400"
       >
         {{ searchActive ? t('modelPlaza.noSearchResult') : t('modelPlaza.empty') }}
       </div>
@@ -70,6 +76,7 @@ import DOMPurify from 'dompurify'
 import Icon from '@/components/icons/Icon.vue'
 import PlazaFilterBar from './PlazaFilterBar.vue'
 import PlazaGroupSection from './PlazaGroupSection.vue'
+import PlazaHeroSection from './PlazaHeroSection.vue'
 import type { ModelPlazaGroup, ModelPlazaResponse } from '@/api/modelPlaza'
 import { useAuthStore } from '@/stores/auth'
 
@@ -146,6 +153,8 @@ const filteredGroups = computed(() => {
       .map((g) => ({ ...g, models: g.models.filter((m) => m.name.toLowerCase().includes(q)) }))
       .filter((g) => g.models.length > 0)
   }
+  // 过滤掉没有模型的空分组
+  groups = groups.filter((g) => g.models && g.models.length > 0)
   // 专属倍率会改变生效值,不能只依赖后端按默认倍率的排序。
   return [...groups].sort(
     (a, b) => effectiveRate(a) - effectiveRate(b) || a.name.localeCompare(b.name)

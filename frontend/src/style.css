@@ -3,6 +3,29 @@
 @tailwind utilities;
 
 @layer base {
+  :root {
+    /* 动态主题 CSS 变量 - 将由 useCharacterTheme 动态设置 */
+    --color-primary-50: #f5f3ff;
+    --color-primary-100: #ede9fe;
+    --color-primary-200: #ddd6fe;
+    --color-primary-300: #c4b5fd;
+    --color-primary-400: #a78bfa;
+    --color-primary-500: #8b5cf6;
+    --color-primary-600: #7c3aed;
+    --color-primary-700: #6d28d9;
+    --color-primary-800: #5b21b6;
+    --color-primary-900: #4c1d95;
+    --color-primary-950: #2e1065;
+    
+    --gradient-background: radial-gradient(circle at 8% -10%, rgba(139, 92, 246, 0.15), transparent 34rem),
+                          radial-gradient(circle at 92% 0%, rgba(236, 72, 153, 0.12), transparent 30rem),
+                          linear-gradient(180deg, #0f0f1e 0%, #1a1625 52%, #0f0f1e 100%);
+    --gradient-card: linear-gradient(135deg, rgba(139, 92, 246, 0.05) 0%, rgba(236, 72, 153, 0.03) 100%);
+    --gradient-button: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 50%, #ec4899 100%);
+    --gradient-text: linear-gradient(135deg, #8b5cf6 0%, #c4b5fd 100%);
+    --glow-color: radial-gradient(circle, rgba(139, 92, 246, 0.4) 0%, transparent 70%);
+  }
+
   * {
     @apply border-gray-200 dark:border-dark-700;
   }
@@ -18,18 +41,18 @@
 
   body {
     @apply min-h-screen text-gray-900 dark:text-gray-100;
-    background:
-      radial-gradient(circle at 8% -10%, rgba(147, 197, 253, 0.32), transparent 34rem),
-      radial-gradient(circle at 92% 0%, rgba(186, 230, 253, 0.28), transparent 30rem),
-      linear-gradient(180deg, #f8fbff 0%, #f1f7ff 52%, #f8fbff 100%);
+    /* 使用动态主题背景 */
+    background: var(--gradient-background);
     background-attachment: fixed;
+    transition: background 0.8s cubic-bezier(0.4, 0, 0.2, 1);
   }
 
+  /* 备用深色模式背景（如果主题未设置） */
   .dark body {
     background:
-      radial-gradient(circle at 8% -10%, rgba(30, 64, 175, 0.26), transparent 34rem),
-      radial-gradient(circle at 92% 0%, rgba(14, 116, 144, 0.18), transparent 30rem),
-      linear-gradient(180deg, #0f172a 0%, #111c35 52%, #0f172a 100%);
+      radial-gradient(circle at 8% -10%, rgba(107, 90, 140, 0.15), transparent 34rem),
+      radial-gradient(circle at 92% 0%, rgba(75, 65, 95, 0.12), transparent 30rem),
+      linear-gradient(180deg, #1a1d26 0%, #1e2130 52%, #1a1d26 100%);
   }
 
   /* 自定义滚动条 - 仅针对 Firefox，避免 Chrome 取消 webkit 的全局定制 */

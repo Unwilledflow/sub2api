@@ -3,6 +3,9 @@
     <!-- Background Decoration -->
     <div class="pointer-events-none fixed inset-0 bg-mesh-gradient"></div>
 
+    <!-- Global Character Display (全屏角色展示) -->
+    <GlobalCharacterDisplay />
+
     <!-- Sidebar -->
     <AppSidebar />
 
@@ -31,6 +34,7 @@ import { useOnboardingTour } from '@/composables/useOnboardingTour'
 import { useOnboardingStore } from '@/stores/onboarding'
 import AppSidebar from './AppSidebar.vue'
 import AppHeader from './AppHeader.vue'
+import GlobalCharacterDisplay from '@/components/common/GlobalCharacterDisplay.vue'
 
 const appStore = useAppStore()
 const authStore = useAuthStore()

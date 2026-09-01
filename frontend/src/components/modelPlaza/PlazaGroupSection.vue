@@ -1,10 +1,10 @@
 <template>
   <section
-    class="overflow-hidden rounded-2xl border bg-white shadow-card dark:bg-dark-800/50"
+    class="group/section overflow-hidden rounded-2xl border border-gray-200/60 bg-white shadow-card transition-all duration-300 hover:shadow-card-hover dark:border-dark-700/40 dark:bg-dark-800/50"
     :class="[platformBorderStrongClass(group.platform)]"
   >
     <!-- 分组头部:名称/平台/倍率徽章/专属/订阅徽章 + 描述 -->
-    <header class="border-b border-gray-100 px-5 py-4 dark:border-dark-700/60">
+    <header class="border-b border-gray-100/80 bg-gradient-to-r from-gray-50/50 to-transparent px-6 py-4 dark:border-dark-700/50 dark:from-dark-800/30">
       <div class="flex flex-wrap items-center gap-2">
         <GroupBadge
           :name="group.name"
@@ -20,33 +20,34 @@
         />
         <span
           v-if="group.is_exclusive"
-          class="inline-flex items-center gap-1 rounded-md bg-purple-50 px-2 py-0.5 text-xs font-medium text-purple-600 dark:bg-purple-900/20 dark:text-purple-400"
+          class="inline-flex items-center gap-1 rounded-lg bg-gradient-to-r from-primary-50 to-primary-100/80 px-2.5 py-1 text-xs font-medium text-primary-700 shadow-sm ring-1 ring-primary-200/50 dark:from-primary-900/30 dark:to-primary-800/20 dark:text-primary-300 dark:ring-primary-700/30"
         >
-          <Icon name="shield" size="xs" class="h-3 w-3" />
+          <Icon name="shield" size="xs" class="h-3.5 w-3.5" />
           {{ t('modelPlaza.badges.exclusive') }}
         </span>
         <span
           v-if="group.subscription_type === 'subscription'"
-          class="inline-flex items-center rounded-md bg-violet-50 px-2 py-0.5 text-xs font-medium text-violet-600 dark:bg-violet-900/20 dark:text-violet-400"
+          class="inline-flex items-center gap-1 rounded-lg bg-gradient-to-r from-accent-50 to-accent-100/80 px-2.5 py-1 text-xs font-medium text-accent-700 shadow-sm ring-1 ring-accent-200/50 dark:from-accent-800/30 dark:to-accent-900/20 dark:text-accent-300 dark:ring-accent-700/30"
         >
+          <Icon name="sparkles" size="xs" class="h-3.5 w-3.5" />
           {{ t('modelPlaza.badges.subscription') }}
         </span>
       </div>
-      <p v-if="group.description" class="mt-2 text-sm text-gray-500 dark:text-dark-400">
+      <p v-if="group.description" class="mt-2.5 text-sm leading-relaxed text-gray-600 dark:text-dark-300">
         {{ group.description }}
       </p>
       <p
         v-if="peakNote"
-        class="mt-1.5 inline-flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400"
+        class="mt-2 inline-flex items-center gap-1.5 rounded-md bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700 dark:bg-amber-900/20 dark:text-amber-300"
       >
-        <Icon name="clock" size="xs" class="h-3 w-3" />
+        <Icon name="clock" size="xs" class="h-3.5 w-3.5" />
         {{ peakNote }}
       </p>
       <p
         v-if="longContextNote"
-        class="mt-1.5 flex items-center gap-1 text-xs text-gray-500 dark:text-dark-400"
+        class="mt-2 flex items-center gap-1.5 text-xs text-gray-500 dark:text-dark-400"
       >
-        <Icon name="infoCircle" size="xs" class="h-3 w-3" />
+        <Icon name="infoCircle" size="xs" class="h-3.5 w-3.5" />
         {{ longContextNote }}
       </p>
     </header>
