@@ -41,19 +41,6 @@
         </div>
       </div>
 
-      <!-- 导航点 -->
-      <div class="navigation-dots">
-        <button
-          v-for="(char, idx) in characters"
-          :key="idx"
-          @click="switchTo(idx)"
-          class="nav-dot"
-          :class="{ active: idx === currentIndex }"
-          :aria-label="char.name"
-        >
-          <span class="dot-inner"></span>
-        </button>
-      </div>
     </div>
   </div>
 </template>
@@ -74,31 +61,31 @@ const characters: Character[] = [
     name: '紫夜',
     description: '神秘的魔法使',
     image: '/characters/character-purple-cat.jpg',
-    themeId: 'purple-night'
+    themeId: 'cyber'
   },
   {
     name: '樱音',
     description: '温柔的治愈师',
     image: '/characters/character-pink.jpg',
-    themeId: 'sakura'
+    themeId: 'sweet'
   },
   {
     name: '冰璃',
     description: '冰雪公主',
     image: '/characters/character-ice-blue.jpg',
-    themeId: 'ice-blue'
+    themeId: 'fresh'
   },
   {
     name: '米瑟',
     description: '温暖守护者',
     image: '/characters/character-beige.jpg',
-    themeId: 'emerald'
+    themeId: 'amber'
   },
   {
     name: '樱舞',
     description: '春日精灵',
     image: '/characters/character-sakura-pink.jpg',
-    themeId: 'flame'
+    themeId: 'sunset'
   },
   {
     name: '彩梦',
@@ -116,7 +103,73 @@ const characters: Character[] = [
     name: '素心',
     description: '纯白天使',
     image: '/characters/character-sketch-1.jpg',
+    themeId: 'nature'
+  },
+  {
+    name: '雨绯',
+    description: '霓虹雨夜的游侠',
+    image: '/characters/character-rain-neon.jpg',
+    themeId: 'cyber'
+  },
+  {
+    name: '忆晨',
+    description: '温暖的陪伴者',
+    image: '/characters/character-amber-warm.jpg',
     themeId: 'amber'
+  },
+  {
+    name: '泣樱',
+    description: '温柔的守护者',
+    image: '/characters/character-tearful-pink.jpg',
+    themeId: 'sweet'
+  },
+  {
+    name: '霜蓝',
+    description: '冷静的技术顾问',
+    image: '/characters/character-frost-blue.jpg',
+    themeId: 'fresh'
+  },
+  {
+    name: '糖果',
+    description: '活泼的校园向导',
+    image: '/characters/character-candy-twin.jpg',
+    themeId: 'starry'
+  },
+  {
+    name: '心笺',
+    description: '手绘的留言助手',
+    image: '/characters/character-sketch-heart.jpg',
+    themeId: 'sweet'
+  },
+  {
+    name: '蓝扇',
+    description: '优雅的和风礼仪官',
+    image: '/characters/character-kimono-fan.jpg',
+    themeId: 'fresh'
+  },
+  {
+    name: '慍眉',
+    description: '直言的效率督察员',
+    image: '/characters/character-braid-annoyed.jpg',
+    themeId: 'nature'
+  },
+  {
+    name: '风信',
+    description: '自由的探索先锋',
+    image: '/characters/character-windswept-sketch.jpg',
+    themeId: 'sunset'
+  },
+  {
+    name: '忧灰',
+    description: '沉静的深度思考者',
+    image: '/characters/character-melancholy-sketch.jpg',
+    themeId: 'moonlight'
+  },
+  {
+    name: '冷萱',
+    description: '一丝不苟的规则守护者',
+    image: '/characters/character-braid-serious.jpg',
+    themeId: 'nature'
   }
 ]
 
@@ -193,7 +246,7 @@ onUnmounted(() => {
   position: fixed;
   inset: 0;
   pointer-events: none;
-  z-index: 1;
+  z-index: 0;
 }
 
 /* 全屏背景渐变 */
@@ -201,24 +254,22 @@ onUnmounted(() => {
   position: absolute;
   inset: 0;
   transition: all 1.2s cubic-bezier(0.4, 0, 0.2, 1);
+  opacity: 0.15;
+  pointer-events: none;
 }
 
-/* 右下角角色展示区 */
+/* 全屏角色展示区 */
 .character-showcase {
   position: fixed;
-  bottom: 0;
-  right: 0;
-  width: 420px;
-  height: 520px;
-  pointer-events: auto;
-  z-index: 40;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
 }
 
 /* 发光背景 */
 .glow-background {
   position: absolute;
   inset: 0;
-  border-radius: 32px 32px 0 0;
   transition: box-shadow 1.2s cubic-bezier(0.4, 0, 0.2, 1);
   pointer-events: none;
 }
@@ -228,10 +279,9 @@ onUnmounted(() => {
   position: absolute;
   inset: 0;
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   justify-content: center;
   overflow: hidden;
-  border-radius: 32px 32px 0 0;
 }
 
 /* 角色图片 */
@@ -239,13 +289,10 @@ onUnmounted(() => {
   width: 100%;
   height: 100%;
   object-fit: cover;
-  object-position: center bottom;
-  filter: drop-shadow(0 8px 32px rgba(0, 0, 0, 0.25));
+  object-position: center;
+  filter: brightness(0.6) saturate(1.2) blur(2px);
   transition: transform 0.6s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.character-container:hover .character-image {
-  transform: scale(1.05) translateY(-8px);
+  opacity: 0.4;
 }
 
 /* 角色切换动画 */
@@ -268,9 +315,8 @@ onUnmounted(() => {
 /* 角色名称标签 */
 .character-badge {
   position: absolute;
-  top: 24px;
-  left: 24px;
-  right: 24px;
+  bottom: 48px;
+  left: 48px;
   background: rgba(255, 255, 255, 0.95);
   backdrop-filter: blur(20px);
   border-radius: 16px;
@@ -279,6 +325,8 @@ onUnmounted(() => {
               0 2px 8px rgba(0, 0, 0, 0.08);
   border: 1px solid rgba(255, 255, 255, 0.8);
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  pointer-events: auto;
+  z-index: 10;
 }
 
 .character-showcase:hover .character-badge {
@@ -312,78 +360,7 @@ onUnmounted(() => {
   font-weight: 500;
 }
 
-/* 导航点 */
-.navigation-dots {
-  position: absolute;
-  bottom: 24px;
-  left: 50%;
-  transform: translateX(-50%);
-  display: flex;
-  gap: 12px;
-  padding: 12px 20px;
-  background: rgba(255, 255, 255, 0.90);
-  backdrop-filter: blur(20px);
-  border-radius: 24px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.6);
-}
-
-.nav-dot {
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  border: none;
-  background: transparent;
-  cursor: pointer;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  position: relative;
-}
-
-.nav-dot:hover {
-  transform: scale(1.15);
-}
-
-.dot-inner {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: var(--color-primary-300);
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.nav-dot.active .dot-inner {
-  width: 18px;
-  height: 18px;
-  background: var(--color-primary-600);
-  box-shadow: 0 0 16px var(--glow-color),
-              0 0 8px var(--color-primary-400);
-}
-
-.nav-dot.active::before {
-  content: '';
-  position: absolute;
-  inset: -4px;
-  border-radius: 50%;
-  border: 2px solid var(--color-primary-300);
-  animation: pulse-ring 1.5s cubic-bezier(0.4, 0, 0.2, 1) infinite;
-}
-
-@keyframes pulse-ring {
-  0%, 100% {
-    transform: scale(1);
-    opacity: 0.6;
-  }
-  50% {
-    transform: scale(1.3);
-    opacity: 0;
-  }
-}
-
-/* 响应式：隐藏在小屏幕 */
+/* 响应式：小屏幕不显示角色背景，保证表单和内容空间 */
 @media (max-width: 1024px) {
   .character-showcase {
     display: none;
@@ -393,11 +370,6 @@ onUnmounted(() => {
 /* Dark mode 适配 */
 .dark .character-badge {
   background: rgba(15, 23, 42, 0.95);
-  border-color: rgba(255, 255, 255, 0.1);
-}
-
-.dark .navigation-dots {
-  background: rgba(15, 23, 42, 0.90);
   border-color: rgba(255, 255, 255, 0.1);
 }
 
