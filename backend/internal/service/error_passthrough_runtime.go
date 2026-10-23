@@ -1,6 +1,10 @@
 package service
 
-import "github.com/gin-gonic/gin"
+import (
+	"net/http"
+
+	"github.com/gin-gonic/gin"
+)
 
 const errorPassthroughServiceContextKey = "error_passthrough_service"
 
@@ -41,6 +45,12 @@ func applyErrorPassthroughRule(
 	errType = defaultErrType
 	errMsg = defaultErrMsg
 
+	// 上游额度/欠费类错误先于管理员透传规则：规则会把上游状态码与原文案带出去，
+	// 既不安全也会让客户端把「上游欠费」误判成自己的请求错误。
+	if IsUpstreamFinancialError(upstreamStatus, responseBody) {
+		return http.StatusBadGateway, "upstream_error", UpstreamUnavailableMessage, false
+	}
+
 	svc := getBoundErrorPassthroughService(c)
 	if svc == nil {
 		return status, errType, errMsg, false
@@ -68,5 +78,10 @@ func applyErrorPassthroughRule(
 
 	// 与现有 failover 场景保持一致：命中规则时统一返回 upstream_error。
 	errType = "upstream_error"
+
+	// 规则自身配的替换文案也可能带上游计费细节，替换后同样要折叠。
+	if IsUpstreamFinancialError(http.StatusBadRequest, []byte(errMsg)) {
+		return http.StatusBadGateway, errType, UpstreamUnavailableMessage, true
+	}
 	return status, errType, errMsg, true
 }

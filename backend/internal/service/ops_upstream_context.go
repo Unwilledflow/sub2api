@@ -60,6 +60,11 @@ const (
 	OpsClientBusinessLimitedReasonLocalFeatureGate        = "local_feature_gate"
 	OpsClientBusinessLimitedReasonLocalPolicyDenied       = "local_policy_denied"
 	OpsClientBusinessLimitedReasonLocalModelConfiguration = "local_model_configuration"
+	// OpsClientBusinessLimitedReasonContentPolicy 标记被本地内容审计（关键词/风控/
+	// cyber 策略）直接拒绝的请求。这类拒绝是请求内容导致的客户端侧结果，不是平台
+	// 故障：若不标记，ops 只能从响应体猜类型，403 会落成 internal/platform + P2，
+	// 把用户内容问题算进平台错误率。
+	OpsClientBusinessLimitedReasonContentPolicy = "content_policy_blocked"
 )
 
 func MarkResponseCommitted(c *gin.Context) { c.Set(ResponseCommittedKey, true) }

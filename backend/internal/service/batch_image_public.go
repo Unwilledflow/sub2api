@@ -1200,12 +1200,32 @@ func BatchImageItemToPublic(item *BatchImageItem) BatchImagePublicItem {
 		out.Status = "succeeded"
 		return out
 	}
+	// 上游额度/欠费类失败：只给通用码与通用文案，回显上游计费细节与密钥都是
+	// 越权信息。持久化行里的原始 code/message 保持不动，只影响对外视图。
+	if batchImageItemIsUpstreamFinancialFailure(item) {
+		out.Error = &BatchImagePublicError{Code: "upstream_error", Message: UpstreamUnavailableMessage}
+		return out
+	}
 	out.Error = &BatchImagePublicError{
 		Code:    batchImageDerefString(item.ErrorCode),
 		Message: sanitizeBatchImagePublicMessage(batchImageDerefString(item.ErrorMessage)),
 		Source:  batchImageItemErrorSource(item),
 	}
 	return out
+}
+
+// batchImageItemIsUpstreamFinancialFailure 判断该失败项是否来自上游额度/欠费。
+// 只有带 provider 来源对象的行才算上游结果，本地计费/校验错误一律原样透出。
+func batchImageItemIsUpstreamFinancialFailure(item *BatchImageItem) bool {
+	if item == nil || item.Status != BatchImageItemStatusFailed {
+		return false
+	}
+	if batchImageItemErrorSource(item) != "provider" {
+		return false
+	}
+	code := batchImageDerefString(item.ErrorCode)
+	message := batchImageDerefString(item.ErrorMessage)
+	return IsUpstreamFinancialError(0, []byte(strings.TrimSpace(message))) || upstreamFinancialCode(code)
 }
 
 func batchImageItemErrorSource(item *BatchImageItem) string {

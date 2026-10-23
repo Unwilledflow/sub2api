@@ -1686,4 +1686,3 @@ func (s *SettingService) InvalidateOpenAICodexTicketHarvestProxyCache() {
 	}
 	s.openAICodexTicketHarvestProxyCache.Store(entry)
 }
-

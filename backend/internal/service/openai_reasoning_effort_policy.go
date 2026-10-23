@@ -282,7 +282,8 @@ var reasoningEffortProbes = []reasoningEffortProbe{
 }
 
 func canonicalReasoningEffortFromModelSuffix(model string) string {
-	if strings.TrimSpace(model) == "" {		return ""
+	if strings.TrimSpace(model) == "" {
+		return ""
 	}
 	modelID := strings.TrimSpace(model)
 	if strings.Contains(modelID, "/") {

@@ -15,6 +15,13 @@ func WrapUpstreamErrorForClient(statusCode int, body []byte) (status int, errTyp
 	if status < 400 || status > 599 {
 		status = http.StatusBadGateway
 	}
+	// 上游余额/额度类错误不能把原状态码（尤其 400/402/403）透给客户端：
+	// 一是暴露上游计费细节，二是客户端会把「上游欠费」误判成自己的请求错误。
+	// 这类错误一律折成 502 + 通用不可用文案，计费与冷却由
+	// GuardUpstreamFinancialError 另行处理。
+	if IsUpstreamFinancialError(statusCode, body) {
+		return http.StatusBadGateway, "upstream_error", "", UpstreamUnavailableMessage
+	}
 
 	message = strings.TrimSpace(sanitizeUpstreamErrorMessage(extractUpstreamErrorMessage(body)))
 	if message == "" {

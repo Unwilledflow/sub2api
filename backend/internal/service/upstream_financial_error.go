@@ -14,6 +14,21 @@ const UpstreamUnavailableMessage = "Upstream service temporarily unavailable"
 const upstreamFinancialErrorSentKey = "upstream_financial_error_sent"
 const upstreamFinancialErrorGuardKey = "upstream_financial_error_guard"
 
+// upstreamErrorEnvelopeType 返回图片流错误事件里的结构化错误码，用于识别
+// 「上游已归一化、但文案不固定」的失败封套；普通 server_error 不算。
+func upstreamErrorEnvelopeType(payload []byte) string {
+	if len(payload) == 0 || !gjson.ValidBytes(payload) {
+		return ""
+	}
+	for _, path := range []string{"error.code", "error.type", "response.error.code", "response.error.type"} {
+		switch value := strings.TrimSpace(gjson.GetBytes(payload, path).String()); value {
+		case "upstream_rejected", "upstream_error":
+			return value
+		}
+	}
+	return ""
+}
+
 // Only call at an upstream failure boundary. Local billing/authentication errors
 // must never enter this classifier. Success content and usage counters are not searched.
 func IsUpstreamFinancialError(status int, body []byte) bool {

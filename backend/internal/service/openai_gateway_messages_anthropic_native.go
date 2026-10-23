@@ -313,6 +313,8 @@ func (s *OpenAIGatewayService) handleNativeAnthropicStreamingResponse(
 	reasoningEffort *string,
 	startTime time.Time,
 ) (*OpenAIForwardResult, error) {
+	// 多行 data: 拼出的额度类失败要先聚合成单帧，逐行折叠才能命中。
+	resp.Body = withUpstreamFinancialFrameGuard(resp.Body)
 	observer := upstreamResponseModelObserverFromContext(c)
 	if observer == nil {
 		observer = beginUpstreamResponseModelObservation(c)
@@ -351,6 +353,8 @@ func (s *OpenAIGatewayService) handleNativeAnthropicStreamingResponse(
 	var firstTokenMs *int
 	clientDisconnected := false
 	sawTerminalEvent := false
+	// 上游 `event: error` 类型行先扣住，等 data 行判定是否为额度类失败再决定下发。
+	pendingErrorEvent := ""
 
 	scanner := bufio.NewScanner(resp.Body)
 	maxLineSize := defaultMaxLineSize
@@ -467,6 +471,12 @@ func (s *OpenAIGatewayService) handleNativeAnthropicStreamingResponse(
 			}
 
 			line := ev.line
+			// 扣住错误事件的类型行：先写出去就把 200 提交了，未提交时折成的 502 会失效。
+			if trimmed := strings.TrimSpace(line); strings.HasPrefix(trimmed, "event:") &&
+				strings.EqualFold(strings.TrimSpace(strings.TrimPrefix(trimmed, "event:")), "error") {
+				pendingErrorEvent = line
+				continue
+			}
 			if data, ok := extractAnthropicSSEDataLine(line); ok {
 				trimmed := strings.TrimSpace(data)
 				observer.ObserveAnthropic([]byte(trimmed))
@@ -483,6 +493,22 @@ func (s *OpenAIGatewayService) handleNativeAnthropicStreamingResponse(
 				if strings.HasPrefix(trimmed, "event:") && anthropicStreamEventIsTerminal(strings.TrimSpace(strings.TrimPrefix(trimmed, "event:")), "") {
 					sawTerminalEvent = true
 				}
+			}
+
+			// 上游额度/欠费类错误：折成通用文案，不把上游计费细节与可能夹带的
+			// 密钥透给客户端（已提交时以带内 error 事件收尾）。折叠后的帧就是本次
+			// 流的终止事件，必须一并记下，否则收尾时会误报「缺少终止事件」。
+			if data, ok := extractAnthropicSSEDataLine(line); ok && upstreamFinancialFailureEnvelope([]byte(strings.TrimSpace(data))) {
+				pendingErrorEvent = ""
+				if WriteUpstreamFinancialError(c, resp.StatusCode, []byte(strings.TrimSpace(data))) {
+					sawTerminalEvent = true
+					flusher.Flush()
+					continue
+				}
+			}
+			if pendingErrorEvent != "" && !clientDisconnected {
+				_, _ = io.WriteString(w, pendingErrorEvent+"\n")
+				pendingErrorEvent = ""
 			}
 
 			if !clientDisconnected {

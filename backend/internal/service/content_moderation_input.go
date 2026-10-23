@@ -450,7 +450,6 @@ func addModerationImageData(images *[]string, mimeType string, data string) {
 	addModerationImage(images, fmt.Sprintf("data:%s;base64,%s", mimeType, data))
 }
 
-
 // ---- Image keyword audit (local customization) ----
 const (
 	maxImageKeywordAuditBytes = 256 * 1024

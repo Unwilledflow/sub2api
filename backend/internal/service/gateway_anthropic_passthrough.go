@@ -404,6 +404,8 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthrough(
 	startTime time.Time,
 	model string,
 ) (*streamingResult, error) {
+	// 多行 data: 拼出的额度类失败要先聚合成单帧，逐行折叠才能命中。
+	resp.Body = withUpstreamFinancialFrameGuard(resp.Body)
 	observer := upstreamResponseModelObserverFromContext(c)
 	if observer == nil {
 		observer = beginUpstreamResponseModelObservation(c)
@@ -521,6 +523,10 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthrough(
 		keepaliveTimer.Reset(keepaliveInterval)
 	}
 	inPartialEvent := false
+	// 上游 `event: error` 行先扣住不下发：额度/欠费类错误的 details 可能夹带上游
+	// 计费信息与密钥，必须等 data 行判定完再决定整条事件是否下发，否则先写 event
+	// 行就已经把 200 提交掉了，折叠成 502 的逻辑永远不生效。
+	pendingErrorEvent := ""
 
 	for {
 		select {
@@ -559,6 +565,12 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthrough(
 			}
 
 			line := ev.line
+			if trimmed := strings.TrimSpace(line); strings.HasPrefix(trimmed, "event:") &&
+				strings.EqualFold(strings.TrimSpace(strings.TrimPrefix(trimmed, "event:")), "error") {
+				// 扣住错误事件的类型行，等 data 行判定是不是财务错误。
+				pendingErrorEvent = line
+				continue
+			}
 			if data, ok := extractAnthropicSSEDataLine(line); ok {
 				trimmed := strings.TrimSpace(data)
 				observer.ObserveAnthropic([]byte(trimmed))
@@ -582,6 +594,27 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthrough(
 				errStatus, errType, errMsg := anthropicStreamErrorSemantics(payload)
 				setOpsUpstreamError(c, errStatus, errMsg, "")
 				MarkOpsStreamError(c, errType, errMsg, errStatus)
+			}
+
+			// 上游余额/额度类错误：未提交时折成 502，已提交时只补一条通用文案，
+			// 不把上游计费细节与可能夹带的密钥透给客户端。命中时连扣住的 event 行
+			// 一起丢弃，整条错误事件都不下发。
+			if data, ok := extractAnthropicSSEDataLine(line); ok && upstreamFinancialFailureEnvelope([]byte(strings.TrimSpace(data))) {
+				body := []byte(strings.TrimSpace(data))
+				sawTerminalEvent = true
+				pendingErrorEvent = ""
+				if WriteUpstreamFinancialError(c, resp.StatusCode, body) {
+					flusher.Flush()
+					continue
+				}
+			}
+
+			// 非财务错误：把扣住的 event 行原样补发，保持事件结构不变。
+			if pendingErrorEvent != "" && !clientDisconnected {
+				if _, err := io.WriteString(w, pendingErrorEvent); err == nil {
+					_, _ = io.WriteString(w, "\n")
+				}
+				pendingErrorEvent = ""
 			}
 
 			if !clientDisconnected {

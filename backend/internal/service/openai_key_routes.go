@@ -18,6 +18,14 @@ func WithOpenAIMessagesKeyRoute(ctx context.Context) context.Context {
 	return context.WithValue(ctx, openAIMessagesKeyRouteContextKey{}, true)
 }
 
+// openAIMessagesExemptPlatform 报告哪些平台在 /v1/messages 上不受分组
+// allow_messages_dispatch 开关约束。MiniMax 与 Kimi/智谱/DeepSeek 同属 CN 厂商，
+// 自带 Anthropic 兼容端点；漏掉它会让 MiniMax 分组在开关关闭时对 Claude Code
+// 客户端恒返回 "This group does not allow /v1/messages dispatch"。
+func openAIMessagesExemptPlatform(platform string) bool {
+	return platform == PlatformGrok || platform == PlatformMiniMax || IsCNProvider(platform)
+}
+
 func openAIMessagesKeyRouteGroupAllowed(ctx context.Context, group *Group) bool {
 	if ctx == nil {
 		return true
@@ -28,10 +36,10 @@ func openAIMessagesKeyRouteGroupAllowed(ctx context.Context, group *Group) bool 
 	if group == nil {
 		return false
 	}
-	if group.Platform == PlatformGrok || IsCNProvider(group.Platform) {
+	if openAIMessagesExemptPlatform(group.Platform) {
 		return true
 	}
-	if platform, ok := ResolvedTargetPlatformFromContext(ctx); ok && (platform == PlatformGrok || IsCNProvider(platform)) {
+	if platform, ok := ResolvedTargetPlatformFromContext(ctx); ok && openAIMessagesExemptPlatform(platform) {
 		return true
 	}
 	// Initial handler dispatch can defer this check to a later smart route.

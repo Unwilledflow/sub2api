@@ -1399,6 +1399,27 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 
 // writeAnthropicError writes an error response in Anthropic Messages API format.
 func writeAnthropicError(c *gin.Context, statusCode int, errType, message string) {
+	// 响应头已提交（例如流式心跳）后再 c.JSON 会把 502 塞进已开始的 SSE 流里，
+	// 并且重复调用会重复写状态码。此时改为带内 error 事件，并按上下文去重。
+	if c != nil && c.Writer != nil && c.Writer.Written() {
+		if c.GetBool(upstreamFinancialErrorSentKey) {
+			return
+		}
+		c.Set(upstreamFinancialErrorSentKey, true)
+		payload, err := json.Marshal(gin.H{
+			"type": "error",
+			"error": gin.H{
+				"type":    errType,
+				"message": message,
+			},
+		})
+		if err != nil {
+			return
+		}
+		_, _ = c.Writer.WriteString("event: error\ndata: " + string(payload) + "\n\n")
+		c.Writer.Flush()
+		return
+	}
 	c.JSON(statusCode, gin.H{
 		"type": "error",
 		"error": gin.H{

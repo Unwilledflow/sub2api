@@ -395,6 +395,9 @@ func buildOpenAIWSHTTPBridgeErrorEvent(statusCode int, message string) []byte {
 }
 
 func buildOpenAIWSHTTPBridgeFailedEvent(responseID, model string, source []byte, fallbackMessage string) []byte {
+	// 上游额度/欠费类失败：code 与 message 一律用通用值，避免把上游计费细节与
+	// 可能夹带的密钥写进下发给客户端的帧里。
+	financial := IsUpstreamFinancialError(0, source)
 	errorType := strings.TrimSpace(gjson.GetBytes(source, "error.type").String())
 	if errorType == "" {
 		errorType = strings.TrimSpace(gjson.GetBytes(source, "response.error.type").String())
@@ -415,6 +418,11 @@ func buildOpenAIWSHTTPBridgeFailedEvent(responseID, model string, source []byte,
 	}
 	if message == "" {
 		message = "Upstream response failed"
+	}
+	if financial {
+		code = "upstream_error"
+		errorType = "upstream_error"
+		message = UpstreamUnavailableMessage
 	}
 	errorBody := map[string]any{"code": code, "message": message}
 	if errorType != "" {
@@ -921,6 +929,10 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 			if rewritten, changed := sanitizeOpenAICapacityShedErrorCodeForClient(clientMessage); changed {
 				clientMessage = rewritten
 			}
+		}
+		// 额度/欠费类失败：客户端帧按白名单重建，只留通用文案与通用码。
+		if (eventType == "error" || eventType == "response.failed") && IsUpstreamFinancialError(0, upstreamMessage) {
+			clientMessage = redactUpstreamFinancialEvent(upstreamMessage, eventType)
 		}
 		if !clientDisconnected && !suppressClientMessage {
 			stageBeforeSemanticOutput := turn == 1 && account.Platform == PlatformOpenAI && !wroteDownstream

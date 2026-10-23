@@ -115,6 +115,8 @@ func handleStreamReadError(err error, clientDisconnected bool, prefix string) (d
 }
 
 func (s *AntigravityGatewayService) handleGeminiStreamingResponse(c *gin.Context, resp *http.Response, startTime time.Time) (*antigravityStreamResult, error) {
+	// 多行 data: 拼出的额度类失败要先聚合成单帧，逐行折叠才能命中。
+	resp.Body = withUpstreamFinancialFrameGuard(resp.Body)
 	if upstreamResponseModelObserverFromContext(c) == nil {
 		beginUpstreamResponseModelObservation(c)
 	}
@@ -209,6 +211,8 @@ func (s *AntigravityGatewayService) handleGeminiStreamingResponse(c *gin.Context
 		keepaliveCh = keepaliveTicker.C
 	}
 	lastDataAt := time.Now()
+	// 上游 `event: error` 类型行先扣住，等 data 行判定是否为额度类失败再决定下发。
+	pendingErrorEvent := ""
 
 	cw := newAntigravityClientWriter(c.Writer, flusher, "antigravity gemini")
 
@@ -247,6 +251,12 @@ func (s *AntigravityGatewayService) handleGeminiStreamingResponse(c *gin.Context
 			line := ev.line
 			s.observeAntigravityGeminiSSELine(c, line)
 			trimmed := strings.TrimRight(line, "\r\n")
+			// 扣住错误事件的类型行：先写出去就把 200 提交了，未提交时折成的 502 会失效。
+			if strings.HasPrefix(strings.TrimSpace(trimmed), "event:") &&
+				strings.EqualFold(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(trimmed), "event:")), "error") {
+				pendingErrorEvent = line
+				continue
+			}
 			if strings.HasPrefix(trimmed, "data:") {
 				payload := strings.TrimSpace(strings.TrimPrefix(trimmed, "data:"))
 				if payload == "" || payload == "[DONE]" {
@@ -263,6 +273,13 @@ func (s *AntigravityGatewayService) handleGeminiStreamingResponse(c *gin.Context
 				// 解析 usage
 				if u := extractGeminiUsage(inner); u != nil {
 					usage = u
+				}
+				// 上游额度/欠费类失败：折成通用文案，不把计费细节与密钥透给客户端。
+				if upstreamFinancialFailureEnvelope(inner) {
+					if WriteUpstreamFinancialError(c, resp.StatusCode, inner) {
+						flusher.Flush()
+						continue
+					}
 				}
 				var parsed map[string]any
 				if json.Unmarshal(inner, &parsed) == nil {
@@ -290,6 +307,19 @@ func (s *AntigravityGatewayService) handleGeminiStreamingResponse(c *gin.Context
 				continue
 			}
 
+			// 上游额度/欠费类失败：折成通用文案，不把计费细节与密钥透给客户端。
+			// 裸 JSON 体（无 data: 前缀）也要拦，避免直通写出。
+			if upstreamFinancialFailureEnvelope([]byte(strings.TrimSpace(trimmed))) {
+				pendingErrorEvent = ""
+				if WriteUpstreamFinancialError(c, resp.StatusCode, []byte(strings.TrimSpace(trimmed))) {
+					flusher.Flush()
+					continue
+				}
+			}
+			if pendingErrorEvent != "" {
+				cw.Fprintf("%s\n", pendingErrorEvent)
+				pendingErrorEvent = ""
+			}
 			cw.Fprintf("%s\n", line)
 
 		case <-intervalCh:
@@ -324,6 +354,8 @@ func (s *AntigravityGatewayService) handleGeminiStreamingResponse(c *gin.Context
 // handleGeminiStreamToNonStreaming 读取上游流式响应，合并为非流式响应返回给客户端
 // Gemini 流式响应是增量的，需要累积所有 chunk 的内容
 func (s *AntigravityGatewayService) handleGeminiStreamToNonStreaming(c *gin.Context, resp *http.Response, startTime time.Time) (*antigravityStreamResult, error) {
+	// 多行 data: 拼出的额度类失败要先聚合成单帧，逐行折叠才能命中。
+	resp.Body = withUpstreamFinancialFrameGuard(resp.Body)
 	if upstreamResponseModelObserverFromContext(c) == nil {
 		beginUpstreamResponseModelObservation(c)
 	}
@@ -409,7 +441,13 @@ func (s *AntigravityGatewayService) handleGeminiStreamToNonStreaming(c *gin.Cont
 			s.observeAntigravityGeminiSSELine(c, line)
 			trimmed := strings.TrimRight(line, "\r\n")
 
+			// 多行 data: 已被聚合成单帧，非 data 行也可能是裸 JSON 失败体：
+			// 两者都要在转成正常响应之前拦下来。
 			if !strings.HasPrefix(trimmed, "data:") {
+				if upstreamFinancialFailureEnvelope([]byte(strings.TrimSpace(trimmed))) {
+					WriteUpstreamFinancialError(c, resp.StatusCode, []byte(strings.TrimSpace(trimmed)))
+					return &antigravityStreamResult{usage: usage, firstTokenMs: firstTokenMs}, nil
+				}
 				continue
 			}
 
@@ -418,10 +456,21 @@ func (s *AntigravityGatewayService) handleGeminiStreamToNonStreaming(c *gin.Cont
 				continue
 			}
 
+			// 上游额度/欠费类失败：折成通用文案（未提交时 502），不把计费细节与
+			// 密钥透给客户端，也不把它当成正常响应收集。
+			if upstreamFinancialFailureEnvelope([]byte(payload)) {
+				WriteUpstreamFinancialError(c, resp.StatusCode, []byte(payload))
+				return &antigravityStreamResult{usage: usage, firstTokenMs: firstTokenMs}, nil
+			}
+
 			// 解包 v1internal 响应
 			inner, parseErr := s.unwrapV1InternalResponse([]byte(payload))
 			if parseErr != nil {
 				continue
+			}
+			if upstreamFinancialFailureEnvelope(inner) {
+				WriteUpstreamFinancialError(c, resp.StatusCode, inner)
+				return &antigravityStreamResult{usage: usage, firstTokenMs: firstTokenMs}, nil
 			}
 
 			var parsed map[string]any

@@ -922,6 +922,11 @@ func (s *OpenAIGatewayService) handleOpenAIImagesNonStreamingResponse(
 		return OpenAIUsage{}, 0, nil, err
 	}
 	body = s.backfillOpenAIImagesB64JSON(ctx, account, parsed, body)
+	// 上游对额度不足也可能回 200 + error 体：直接 c.Data 会把上游计费原文与
+	// 可能夹带的密钥透给客户端，这里先折叠成 502 + 通用文案。
+	if WriteUpstreamFinancialError(c, resp.StatusCode, body) {
+		return OpenAIUsage{}, 0, nil, fmt.Errorf("upstream financial error: %d", resp.StatusCode)
+	}
 	responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
 	contentType := "application/json"
 	if s.cfg != nil && !s.cfg.Security.ResponseHeaders.Enabled {
@@ -940,6 +945,8 @@ func (s *OpenAIGatewayService) handleOpenAIImagesStreamingResponse(
 	c *gin.Context,
 	startTime time.Time,
 ) (OpenAIUsage, int, []string, *int, error) {
+	// 多行 data: 拼出的额度类失败要先聚合成单帧，逐行折叠才能命中。
+	resp.Body = withUpstreamFinancialFrameGuard(resp.Body)
 	responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
 	contentType := strings.TrimSpace(resp.Header.Get("Content-Type"))
 	if contentType == "" {
@@ -963,6 +970,9 @@ func (s *OpenAIGatewayService) handleOpenAIImagesStreamingResponse(
 	fallbackLimit := resolveUpstreamResponseReadLimit(s.cfg)
 	seenSSEData := false
 	fallbackTooLarge := false
+	// 上游 `event: error` 行先扣住，等 data 行判定是否额度类失败再决定是否下发。
+	pendingErrorEvent := ""
+	financialFailure := false
 	var sseData openAISSEDataAccumulator
 
 	processSSEData := func(dataBytes []byte) {
@@ -980,6 +990,31 @@ func (s *OpenAIGatewayService) handleOpenAIImagesStreamingResponse(
 	processLine := func(line []byte) {
 		if len(line) == 0 {
 			return
+		}
+		// 上游错误事件先扣住类型行，等 data 行判定是不是额度类失败：直接落盘会
+		// 把上游计费细节与密钥透给客户端，而且写出去就提交了 200，无法再折成 502。
+		if trimmed := strings.TrimRight(string(line), "\r\n"); strings.HasPrefix(strings.TrimSpace(trimmed), "event:") &&
+			strings.EqualFold(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(trimmed), "event:")), "error") {
+			pendingErrorEvent = trimmed
+			return
+		}
+		if data, ok := extractOpenAISSEDataLine(strings.TrimRight(string(line), "\r\n")); ok &&
+			upstreamFinancialFailureEnvelope([]byte(strings.TrimSpace(data))) {
+			financialFailure = true
+			pendingErrorEvent = ""
+			w := c.Writer
+			if value, exists := c.Get(upstreamFinancialErrorGuardKey); exists {
+				if guard, ok := value.(*upstreamFinancialErrorWriter); ok && guard != nil {
+					w = guard.ResponseWriter
+				}
+			}
+			_ = writeUpstreamFinancialError(c, w)
+			flusher.Flush()
+			return
+		}
+		if pendingErrorEvent != "" && !clientDisconnected {
+			_, _ = io.WriteString(c.Writer, pendingErrorEvent+"\n")
+			pendingErrorEvent = ""
 		}
 		if firstTokenMs == nil {
 			ms := int(time.Since(startTime).Milliseconds())
@@ -1040,6 +1075,9 @@ func (s *OpenAIGatewayService) handleOpenAIImagesStreamingResponse(
 		}
 		flushSSEEvent()
 		finalizeFallbackBody()
+		if financialFailure {
+			return usage, imageCounter.Count(), imageCounter.Sizes(), firstTokenMs, fmt.Errorf("upstream financial error")
+		}
 		return usage, imageCounter.Count(), imageCounter.Sizes(), firstTokenMs, nil
 	}
 
@@ -1107,6 +1145,9 @@ func (s *OpenAIGatewayService) handleOpenAIImagesStreamingResponse(
 			if !ok {
 				flushSSEEvent()
 				finalizeFallbackBody()
+				if financialFailure {
+					return usage, imageCounter.Count(), imageCounter.Sizes(), firstTokenMs, fmt.Errorf("upstream financial error")
+				}
 				return usage, imageCounter.Count(), imageCounter.Sizes(), firstTokenMs, nil
 			}
 			if ev.err != nil {

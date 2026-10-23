@@ -937,6 +937,20 @@ func (s *OpenAIGatewayService) handleOpenAIImagesErrorResponse(
 		)
 	}
 
+	// 上游余额/额度类错误：折成 502 + 通用不可用文案，既不让客户端把「上游欠费」
+	// 读成自己的请求错误，也不回显上游计费细节。必须早于管理员透传规则，否则规则
+	// 会把原始状态码与原文案带出去。
+	if IsUpstreamFinancialError(resp.StatusCode, body) {
+		MarkResponseCommitted(c)
+		writeOpenAIImagesUpstreamErrorResponse(c, &OpenAIImagesUpstreamError{
+			StatusCode:        http.StatusBadGateway,
+			ErrorType:         "upstream_error",
+			Message:           UpstreamUnavailableMessage,
+			UpstreamRequestID: strings.TrimSpace(resp.Header.Get("x-request-id")),
+		})
+		return nil, fmt.Errorf("upstream error: %d", resp.StatusCode)
+	}
+
 	// Honor admin-configured error passthrough rules first.
 	if status, errType, errMsg, matched := applyErrorPassthroughRule(
 		c,
@@ -1142,6 +1156,20 @@ func writeOpenAIImagesUpstreamErrorResponse(c *gin.Context, err *OpenAIImagesUps
 }
 
 func (s *OpenAIGatewayService) writeOpenAIImagesStreamEvent(c *gin.Context, flusher http.Flusher, eventName string, payload []byte) error {
+	// 额度/欠费类错误事件重建为通用封套：可能夹带上游计费细节与密钥，未提交时
+	// 折成 502，已提交时只补一条带内通用文案。普通错误事件保持原样透传。
+	if strings.EqualFold(strings.TrimSpace(eventName), "error") &&
+		(upstreamFinancialFailureEnvelope(payload) || upstreamErrorEnvelopeType(payload) != "") {
+		w := c.Writer
+		if value, exists := c.Get(upstreamFinancialErrorGuardKey); exists {
+			if guard, ok := value.(*upstreamFinancialErrorWriter); ok && guard != nil {
+				w = guard.ResponseWriter
+			}
+		}
+		_ = writeUpstreamFinancialError(c, w)
+		flusher.Flush()
+		return nil
+	}
 	if strings.TrimSpace(eventName) != "" {
 		if _, err := fmt.Fprintf(c.Writer, "event: %s\n", eventName); err != nil {
 			return err

@@ -320,6 +320,8 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 	failedMessage := ""
 	clientOutputStarted := false
 	// API-key providers can return the same bare Responses errors as OAuth.
+	// 非 OpenAI 平台遇到额度/欠费类失败时也会置为 true，走同一套「抑制裸 error
+	// 帧、只下发一条通用 response.failed」的终端语义。
 	codexFailureTerminal := account != nil && account.Platform == PlatformOpenAI
 	upstreamRequestID := strings.TrimSpace(resp.Header.Get("x-request-id"))
 	var streamEarlyErr error
@@ -691,6 +693,11 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 				isOpenAIUpstreamCapacityShedEvent(dataBytes) {
 				logOpenAICapacityFailoverSuppressed(ctx, account, "native_sse", upstreamRequestID, eventType)
 				capacityFailoverSuppressedLogged = true
+			}
+			// 额度/欠费类失败在任意平台都按终端失败处理：抑制带上游计费细节的裸
+			// error 帧，只把随后的 response.failed 以通用文案下发给客户端。
+			if !codexFailureTerminal && eventType == "error" && IsUpstreamFinancialError(0, dataBytes) {
+				codexFailureTerminal = true
 			}
 			cyberHit := false
 			if eventType == "response.failed" || eventType == "error" {
@@ -1829,6 +1836,12 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 	if err != nil {
 		return nil, err
 	}
+	// 上游用 HTTP 200 携带额度/欠费失败体时同样是失败：折成 502 + 通用文案，
+	// 不把上游计费细节与可能夹带的密钥透给客户端。
+	if upstreamFinancialFailureEnvelope(body) {
+		WriteUpstreamFinancialError(c, resp.StatusCode, body)
+		return &openaiNonStreamingResult{}, nil
+	}
 	observer := upstreamResponseModelObserverFromContext(c)
 	if observer == nil {
 		observer = beginUpstreamResponseModelObservation(c)
@@ -2154,6 +2167,12 @@ func buildOpenAIResponseFailedSSE(responseID, model string, source []byte, fallb
 	if message == "" {
 		message = "Upstream response failed"
 	}
+	// 额度/欠费类失败按白名单重建，只留通用文案与通用码。
+	if IsUpstreamFinancialError(0, source) {
+		code = "upstream_error"
+		errorType = "upstream_error"
+		message = UpstreamUnavailableMessage
+	}
 	errorBody := gin.H{"code": code, "message": message}
 	if errorType != "" {
 		errorBody["type"] = errorType
@@ -2188,6 +2207,11 @@ func sanitizeOpenAIResponseFailedEventForClient(payload []byte, eventType string
 		return payload, false
 	}
 	updated := payload
+	// 上游额度/欠费类失败：整帧按白名单重建，只留通用文案，避免把上游计费细节
+	// 与可能夹带的密钥带给客户端（sequence_number / response.id 等骨架保留）。
+	if upstreamFinancialFailureEnvelope(payload) {
+		return redactUpstreamFinancialEvent(payload, eventType), true
+	}
 	// 容量降载码对 Codex CLI 是致命错误；事件既然要写给客户端（failover 已不可用），
 	// 就改写为客户端可重试的错误码。error 帧与 response.failed 都要改：上游降载
 	// 总是先推 error 帧再收 failed，两帧携带同一个错误。

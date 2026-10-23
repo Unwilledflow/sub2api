@@ -40,6 +40,17 @@ func (r *openAIWSIngressCapacityShedRepo) SetError(_ context.Context, id int64, 
 	return nil
 }
 
+// SetRateLimited 让额度类失败触发的 429 回退冷却落到 stub 里。stubOpenAIAccountRepo
+// 内嵌的是 nil 的 AccountRepository 接口，缺这个方法时调用会直接空指针崩溃。
+func (r *openAIWSIngressCapacityShedRepo) SetRateLimited(_ context.Context, id int64, resetAt time.Time) error {
+	for i := range r.accounts {
+		if r.accounts[i].ID == id {
+			r.accounts[i].RateLimitResetAt = &resetAt
+		}
+	}
+	return nil
+}
+
 func TestUpstreamFinancialWSNativeModes(t *testing.T) {
 	for _, mode := range []string{OpenAIWSIngressModeCtxPool, OpenAIWSIngressModePassthrough} {
 		for _, prelude := range []bool{false, true} {

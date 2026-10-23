@@ -1680,6 +1680,11 @@ func openAIStreamFailedEventShouldFailover(payload []byte, message string) bool 
 	if hit, _, _ := detectOpenAICyberPolicy(payload); hit {
 		return false
 	}
+	// 上游额度/欠费类失败：该账号在本轮已不可用，换账号重试；错误体只留在内部
+	// failover 记录里，绝不透给客户端。
+	if IsUpstreamFinancialError(0, payload) {
+		return true
+	}
 	if isOpenAIContextWindowError(message, payload) {
 		return false
 	}
@@ -1739,6 +1744,10 @@ func openAIStreamFailedEventShouldFailover(payload []byte, message string) bool 
 func openAIStreamErrorEventShouldFailover(payload []byte, message string) bool {
 	if hit, _, _ := detectOpenAICyberPolicy(payload); hit {
 		return false
+	}
+	// 上游额度/欠费类失败：该账号本轮不可用，换账号重试，错误体只留内部记录。
+	if IsUpstreamFinancialError(0, payload) {
+		return true
 	}
 	if isOpenAIContextWindowError(message, payload) {
 		return false
@@ -2270,6 +2279,11 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 				logOpenAICapacityFailoverSuppressed(ctx, account, "passthrough_sse", upstreamRequestID, eventType)
 				capacityFailoverSuppressedLogged = true
 			}
+			// 额度/欠费类失败在任意平台都按终端失败处理：抑制带上游计费细节的裸
+			// error 帧，只把随后的 response.failed 以通用文案下发给客户端。
+			if !codexFailureTerminal && eventType == "error" && IsUpstreamFinancialError(0, dataBytes) {
+				codexFailureTerminal = true
+			}
 			cyberHit := false
 			if eventType == "response.failed" || eventType == "error" {
 				if codexFailureTerminal && eventType == "error" {
@@ -2633,6 +2647,11 @@ func (s *OpenAIGatewayService) handleNonStreamingResponsePassthrough(
 	body, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, openAITooLargeError)
 	if err != nil {
 		return nil, err
+	}
+	// 上游用 HTTP 200 携带额度/欠费失败体时同样是失败：折成 502 + 通用文案。
+	if upstreamFinancialFailureEnvelope(body) {
+		WriteUpstreamFinancialError(c, resp.StatusCode, body)
+		return &openaiNonStreamingResultPassthrough{}, nil
 	}
 	observer := upstreamResponseModelObserverFromContext(c)
 	if observer == nil {

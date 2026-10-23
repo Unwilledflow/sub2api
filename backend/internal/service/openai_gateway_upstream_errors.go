@@ -761,6 +761,21 @@ func (s *OpenAIGatewayService) handleErrorResponse(
 
 	MarkResponseCommitted(c)
 
+	// 上游余额/额度类错误先于确定性 4xx 透传处理：400 余额不足不能原样回给客户端
+	// （会被下游当成自己的请求错误），统一 502 + 通用不可用文案。
+	if IsUpstreamFinancialError(resp.StatusCode, body) {
+		c.JSON(http.StatusBadGateway, gin.H{
+			"error": gin.H{
+				"type":    "upstream_error",
+				"message": UpstreamUnavailableMessage,
+			},
+		})
+		if upstreamMsg == "" {
+			return nil, fmt.Errorf("upstream error: %d", resp.StatusCode)
+		}
+		return nil, fmt.Errorf("upstream error: %d message=%s", resp.StatusCode, upstreamMsg)
+	}
+
 	// 上游 400 是确定性的请求错误：同一份请求体换账号、重试多少次都会失败。归一成
 	// 502 upstream_error 会让下游网关把它当成可重试的上游故障反复重放（#5479 实测
 	// 30 个失败请求被放大成 60 次上游调用），同时抹掉客户端定位问题所需的 code/param。

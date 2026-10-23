@@ -539,6 +539,22 @@ func (s *GatewayService) handleErrorResponse(ctx context.Context, resp *http.Res
 		return nil, fmt.Errorf("upstream error: %d", resp.StatusCode)
 	}
 
+	// 上游余额/额度类错误：不能按原始状态码透传（400 会把上游欠费说成客户端
+	// 请求错误），统一折成 502 + 通用不可用文案，也不回显上游计费细节。
+	if IsUpstreamFinancialError(resp.StatusCode, body) {
+		c.JSON(http.StatusBadGateway, gin.H{
+			"type": "error",
+			"error": gin.H{
+				"type":    "upstream_error",
+				"message": UpstreamUnavailableMessage,
+			},
+		})
+		if upstreamMsg == "" {
+			return nil, fmt.Errorf("upstream error: %d", resp.StatusCode)
+		}
+		return nil, fmt.Errorf("upstream error: %d message=%s", resp.StatusCode, upstreamMsg)
+	}
+
 	// 根据状态码返回适当的自定义错误响应（不透传上游详细信息）
 	var errType, errMsg string
 	var statusCode int

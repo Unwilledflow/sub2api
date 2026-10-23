@@ -16,6 +16,7 @@ import (
 	openaiwsv2 "github.com/Wei-Shaw/sub2api/internal/service/openai_ws_v2"
 	coderws "github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
+	"github.com/tidwall/gjson"
 )
 
 const openAIWSMessageReadLimitBytes int64 = 16 * 1024 * 1024
@@ -372,6 +373,13 @@ func (c *coderOpenAIWSClientConn) WriteFrame(ctx context.Context, msgType coderw
 	}
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	// 额度/欠费类失败帧按白名单重建，只留通用文案与通用码；正常输出帧
+	// （增量、completed、工具参数）保持字节不变，不扫描用户内容。
+	if frameType := strings.TrimSpace(gjson.GetBytes(payload, "type").String()); frameType == "error" || frameType == "response.failed" {
+		if upstreamFinancialFailureEnvelope(payload) {
+			payload = redactUpstreamFinancialEvent(payload, frameType)
+		}
 	}
 	return c.conn.Write(ctx, msgType, payload)
 }

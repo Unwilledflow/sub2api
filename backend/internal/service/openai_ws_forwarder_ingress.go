@@ -484,6 +484,13 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		writeCtx, cancel := newOpenAIWSDownstreamWriteContext(ctx, hooks, s.openAIWSWriteTimeout())
 		defer cancel()
 		message = restoreCodexToolNamesFromContext(c, message)
+		// 额度/欠费类失败帧按白名单重建，只留通用文案与通用码，避免把上游
+		// 计费细节与可能夹带的密钥发给客户端；正常输出帧保持字节不变。
+		if frameType := strings.TrimSpace(gjson.GetBytes(message, "type").String()); frameType == "error" || frameType == "response.failed" {
+			if upstreamFinancialFailureEnvelope(message) {
+				message = redactUpstreamFinancialEvent(message, frameType)
+			}
+		}
 		return clientConn.Write(writeCtx, coderws.MessageText, message)
 	}
 

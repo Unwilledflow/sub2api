@@ -1178,6 +1178,26 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 
 // writeChatCompletionsError writes an error response in OpenAI Chat Completions format.
 func writeChatCompletionsError(c *gin.Context, statusCode int, errType, message string) {
+	// 响应头已提交（例如流式心跳）后再 c.JSON 会把 502 塞进已开始的 SSE 流里，
+	// 重复调用还会重复写状态码。此时改为带内 error 帧，并按上下文去重。
+	if c != nil && c.Writer != nil && c.Writer.Written() {
+		if c.GetBool(upstreamFinancialErrorSentKey) {
+			return
+		}
+		c.Set(upstreamFinancialErrorSentKey, true)
+		payload, err := json.Marshal(gin.H{
+			"error": gin.H{
+				"type":    errType,
+				"message": message,
+			},
+		})
+		if err != nil {
+			return
+		}
+		_, _ = c.Writer.WriteString("data: " + string(payload) + "\n\n")
+		c.Writer.Flush()
+		return
+	}
 	MarkResponseCommitted(c)
 	c.JSON(statusCode, gin.H{
 		"error": gin.H{

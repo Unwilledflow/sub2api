@@ -1885,6 +1885,19 @@ func (s *GeminiMessagesCompatService) writeGeminiNativeUpstreamError(c *gin.Cont
 		contentType = "application/json"
 	}
 	MarkResponseCommitted(c)
+	// 上游余额/额度类错误不透传原始状态与文案：上游欠费不能被客户端读成
+	// 「我的请求有问题」，也不回显上游计费细节。
+	if IsUpstreamFinancialError(resp.StatusCode, respBody) {
+		c.JSON(http.StatusBadGateway, gin.H{"error": gin.H{
+			"code":    http.StatusBadGateway,
+			"message": UpstreamUnavailableMessage,
+			"status":  "UNAVAILABLE",
+		}})
+		if upstreamMsg == "" {
+			return fmt.Errorf("gemini upstream error: %d", resp.StatusCode)
+		}
+		return fmt.Errorf("gemini upstream error: %d message=%s", resp.StatusCode, upstreamMsg)
+	}
 	c.Data(resp.StatusCode, contentType, respBody)
 	if upstreamMsg == "" {
 		return fmt.Errorf("gemini upstream error: %d", resp.StatusCode)
@@ -2851,6 +2864,11 @@ func (s *GeminiMessagesCompatService) handleNativeNonStreamingResponse(c *gin.Co
 			respBody = unwrappedBody
 		}
 	}
+	// 上游用 HTTP 200 携带额度/欠费失败体时同样是失败：折成 502 + 通用文案。
+	if upstreamFinancialFailureEnvelope(respBody) {
+		WriteUpstreamFinancialError(c, resp.StatusCode, respBody)
+		return &ClaudeUsage{}, nil
+	}
 	observer := upstreamResponseModelObserverFromContext(c)
 	if observer == nil {
 		observer = beginUpstreamResponseModelObservation(c)
@@ -2879,6 +2897,8 @@ func (s *GeminiMessagesCompatService) handleNativeNonStreamingResponse(c *gin.Co
 }
 
 func (s *GeminiMessagesCompatService) handleNativeStreamingResponse(c *gin.Context, resp *http.Response, startTime time.Time, isOAuth bool, account *Account, upstreamRequestID string) (*geminiNativeStreamResult, error) {
+	// 多行 data: 拼出的额度类失败要先聚合成单帧，逐行折叠才能命中。
+	resp.Body = withUpstreamFinancialFrameGuard(resp.Body)
 	if s.cfg != nil && s.cfg.Gateway.GeminiDebugResponseHeaders {
 		logger.LegacyPrintf("service.gemini_messages_compat", "[GeminiAPI] ========== Streaming Response Headers ==========")
 		for key, values := range resp.Header {
@@ -2921,11 +2941,19 @@ func (s *GeminiMessagesCompatService) handleNativeStreamingResponse(c *gin.Conte
 	var best geminiResponseSignal
 	sawDataEvent := false
 	fallback := &geminiSSEFallbackBody{}
+	// 上游 `event: error` 类型行先扣住，等 data 行判定是否为额度类失败再决定下发。
+	pendingErrorEvent := ""
 
 	for {
 		line, err := reader.ReadString('\n')
 		if len(line) > 0 {
 			trimmed := strings.TrimRight(line, "\r\n")
+			// 扣住错误事件的类型行：先写出去就把 200 提交了，未提交时折成的 502 会失效。
+			if strings.HasPrefix(strings.TrimSpace(trimmed), "event:") &&
+				strings.EqualFold(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(trimmed), "event:")), "error") {
+				pendingErrorEvent = trimmed
+				continue
+			}
 			if strings.HasPrefix(trimmed, "data:") {
 				payload := strings.TrimSpace(strings.TrimPrefix(trimmed, "data:"))
 				// Keepalive / done markers
@@ -2957,6 +2985,19 @@ func (s *GeminiMessagesCompatService) handleNativeStreamingResponse(c *gin.Conte
 					observer.ObserveGemini(rawBytes)
 					observeGeminiImageOutputs(c, rawBytes)
 
+					// 上游余额/额度类错误帧：折成 502（未提交时）或带内通用文案
+					// （已提交时），不把上游计费细节与可能夹带的密钥透给客户端。
+					if upstreamFinancialFailureEnvelope(rawBytes) {
+						pendingErrorEvent = ""
+						WriteUpstreamFinancialError(c, resp.StatusCode, rawBytes)
+						flusher.Flush()
+						continue
+					}
+					if pendingErrorEvent != "" {
+						_, _ = io.WriteString(c.Writer, pendingErrorEvent+"\n")
+						pendingErrorEvent = ""
+					}
+
 					if firstTokenMs == nil {
 						ms := int(time.Since(startTime).Milliseconds())
 						firstTokenMs = &ms
@@ -2972,6 +3013,10 @@ func (s *GeminiMessagesCompatService) handleNativeStreamingResponse(c *gin.Conte
 					flusher.Flush()
 				}
 			} else {
+				if pendingErrorEvent != "" {
+					_, _ = io.WriteString(c.Writer, pendingErrorEvent+"\n")
+					pendingErrorEvent = ""
+				}
 				if !sawDataEvent {
 					fallback.AddLine(trimmed)
 				}
