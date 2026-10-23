@@ -23,6 +23,21 @@ backend/main
 *.out
 coverage.html
 
+# 编译/调试中间产物（曾被误提交到 frontend/public/characters/）
+*.pdb
+*.ilk
+*.obj
+*.exp
+*.lib
+*.idb
+
+# 编辑器与手工备份残留
+*.bak
+*.bak-*
+*.orig
+*.rej
+*~
+
 # 依赖（使用 go mod）
 /vendor/
 backend/vendor/
