@@ -1,0 +1,79 @@
+name: Security Scan
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: '0 3 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  backend-security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: backend/go.mod
+          check-latest: false
+          cache-dependency-path: backend/go.sum
+      - name: Verify Go version
+        run: |
+          go version | grep -q 'go1.26.10'
+      - name: Run govulncheck
+        working-directory: backend
+        run: |
+          # pipefail 必须开：否则管道最后一个命令（tee）会盖掉 govulncheck 的退出码，
+          # 「代码真的调用到漏洞」这种情况就不会让 job 失败。
+          set -o pipefail
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck -show verbose ./... 2>&1 | tee govulncheck.log
+      # govulncheck 只在**代码调用到**漏洞时失败。「依赖里有漏洞但没调用到」这类
+      # 发现（Module Results 段）既不失败也不打印，于是永远没人修 ——
+      # 2026-09-30 实测这样躺着 11 条（x/image 一个占 5 条）。这一步把它们显式暴露，
+      # 并且只要存在**有修复版**的就失败，防止继续堆积。
+      - name: Surface module-level vulnerabilities
+        if: always()
+        working-directory: backend
+        run: |
+          python3 ../tools/check_govulncheck_modules.py \
+            --log govulncheck.log \
+            --fail-on-fixable
+      - name: Upload govulncheck log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: govulncheck-log
+          path: backend/govulncheck.log
+          if-no-files-found: ignore
+
+  frontend-security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 9
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - name: Install dependencies
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+      - name: Run pnpm audit
+        working-directory: frontend
+        run: |
+          pnpm audit --prod --audit-level=high --json > audit.json || true
+      - name: Check audit exceptions
+        run: |
+          python tools/check_pnpm_audit_exceptions.py \
+            --audit frontend/audit.json \
+            --exceptions .github/audit-exceptions.yml

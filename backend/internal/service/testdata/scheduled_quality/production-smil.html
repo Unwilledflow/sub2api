@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>骑自行车的鹈鹕</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; margin: 0; }
+    body {
+      display: grid;
+      place-items: center;
+      overflow: hidden;
+      background: #d9eff0;
+    }
+    svg {
+      display: block;
+      width: 100%;
+      max-height: 100%;
+      aspect-ratio: 1000 / 570;
+    }
+
+    .wheel-rear  { transform-origin: 380px 390px; animation: spin 1.2s linear infinite; }
+    .wheel-front { transform-origin: 650px 390px; animation: spin 1.2s linear infinite; }
+    .crank       { transform-origin: 540px 358px; animation: spin 1.2s linear infinite; }
+    .bird        { animation: bob .6s ease-in-out infinite alternate; }
+    .wing        { transform-origin: 492px 215px; animation: wing .6s ease-in-out infinite alternate; }
+    .clouds      { animation: drift 22s linear infinite alternate; }
+    .road-lines  { animation: travel 1.2s linear infinite; }
+
+    @keyframes spin   { to { transform: rotate(360deg); } }
+    @keyframes bob    { to { transform: translateY(3px); } }
+    @keyframes wing   { to { transform: rotate(-5deg); } }
+    @keyframes drift  { to { transform: translateX(35px); } }
+    @keyframes travel { to { transform: translateX(-80px); } }
+
+    @media (prefers-reduced-motion: reduce) {
+      .wheel-rear, .wheel-front, .crank, .bird, .wing, .clouds, .road-lines {
+        animation: none;
+      }
+    }
+  </style>
+</head>
+<body>
+<svg viewBox="0 0 1000 570" preserveAspectRatio="xMidYMid meet"
+     xmlns="http://www.w3.org/2000/svg" role="img"
+     aria-labelledby="title desc">
+  <title id="title">鹈鹕骑自行车</title>
+  <desc id="desc">一只奶油色的鹈鹕骑着蓝绿色自行车，在晴朗的乡间道路上循环前行。</desc>
+
+  <defs>
+    <linearGradient id="sky" x2="0" y2="1">
+      <stop stop-color="#b9e4ed"/>
+      <stop offset="1" stop-color="#f3eee0"/>
+    </linearGradient>
+    <linearGradient id="pouch" x2="0" y2="1">
+      <stop stop-color="#f5ba69"/>
+      <stop offset="1" stop-color="#df8654"/>
+    </linearGradient>
+    <linearGradient id="body" x2="0" y2="1">
+      <stop stop-color="#fff9df"/>
+      <stop offset="1" stop-color="#e8dcb5"/>
+    </linearGradient>
+    <g id="spokes" stroke="#799596" stroke-width="2" opacity=".78">
+      <path d="M0-79V79 M-79 0H79 M-56-56 56 56 M56-56-56 56
+               M-30-73 30 73 M30-73-30 73 M-73-30 73 30 M73-30-73 30"/>
+    </g>
+    <g id="cloud" fill="#fffdf3" opacity=".82">
+      <ellipse cx="0" cy="0" rx="38" ry="13"/>
+      <circle cx="-19" cy="-9" r="16"/>
+      <circle cx="5" cy="-16" r="21"/>
+      <circle cx="28" cy="-7" r="15"/>
+    </g>
+    <g id="flower">
+      <path d="M0 0v-18" stroke="#597d64" stroke-width="2"/>
+      <circle cy="-22" r="5" fill="#f7d48a"/>
+      <circle cy="-22" r="2" fill="#ad704c"/>
+    </g>
+  </defs>
+
+  <!-- Landscape -->
+  <path fill="url(#sky)" d="M0 0h1000v570H0z"/>
+  <circle cx="800" cy="105" r="47" fill="#fff4bd" opacity=".82"/>
+  <circle cx="800" cy="105" r="65" fill="none" stroke="#fff4bd" stroke-width="2" opacity=".45"/>
+  <g class="clouds">
+    <use href="#cloud" x="145" y="110"/>
+    <use href="#cloud" x="414" y="76" transform="translate(414 76) scale(.65) translate(-414 -76)"/>
+    <use href="#cloud" x="908" y="173" transform="translate(908 173) scale(.8) translate(-908 -173)"/>
+  </g>
+  <path d="M0 334Q117 275 239 325T486 316T745 315T1000 292V450H0Z" fill="#a9c8aa"/>
+  <path d="M0 379Q145 321 286 365T551 351T800 366T1000 330V450H0Z" fill="#80aa91"/>
+  <path d="M0 414Q145 380 285 408T565 397T830 409T1000 383V450H0Z" fill="#628f7a"/>
+  <path d="M0 428H1000V570H0Z" fill="#e8d3aa"/>
+  <path d="M0 447H1000" stroke="#f8e8c7" stroke-width="5"/>
+  <path d="M0 492H1000" stroke="#d4b98f" stroke-width="2" opacity=".6"/>
+  <g class="road-lines" fill="#f9ebce" opacity=".8">
+    <rect x="-40" y="519" width="45" height="4" rx="2"/>
+    <rect x="40" y="519" width="45" height="4" rx="2"/>
+    <rect x="120" y="519" width="45" height="4" rx="2"/>
+    <rect x="200" y="519" width="45" height="4" rx="2"/>
+    <rect x="280" y="519" width="45" height="4" rx="2"/>
+    <rect x="360" y="519" width="45" height="4" rx="2"/>
+    <rect x="440" y="519" width="45" height="4" rx="2"/>
+    <rect x="520" y="519" width="45" height="4" rx="2"/>
+    <rect x="600" y="519" width="45" height="4" rx="2"/>
+    <rect x="680" y="519" width="45" height="4" rx="2"/>
+    <rect x="760" y="519" width="45" height="4" rx="2"/>
+    <rect x="840" y="519" width="45" height="4" rx="2"/>
+    <rect x="920" y="519" width="45" height="4" rx="2"/>
+    <rect x="1000" y="519" width="45" height="4" rx="2"/>
+  </g>
+
+  <!-- Small roadside details and the bicycle's ground shadow -->
+  <g fill="#477f6a" opacity=".8">
+    <path d="M75 437q-8-16-13-14 6 12 13 14m0 0q5-22 11-22-3 13-11 22"/>
+    <path d="M867 438q-8-16-13-14 6 12 13 14m0 0q5-22 11-22-3 13-11 22"/>
+    <path d="M929 439q-7-14-12-14 5 10 12 14m0 0q5-18 10-18-2 12-10 18"/>
+  </g>
+  <use href="#flower" x="104" y="442"/>
+  <use href="#flower" x="891" y="443"/>
+  <ellipse cx="515" cy="485" rx="263" ry="13" fill="#997d67" opacity=".2"/>
+
+  <!-- Wheels: rotating spokes sit inside stationary tires. -->
+  <g fill="none">
+    <circle cx="380" cy="390" r="92" stroke="#344c54" stroke-width="13"/>
+    <circle cx="650" cy="390" r="92" stroke="#344c54" stroke-width="13"/>
+    <circle cx="380" cy="390" r="84" stroke="#f9f1d9" stroke-width="4"/>
+    <circle cx="650" cy="390" r="84" stroke="#f9f1d9" stroke-width="4"/>
+    <g class="wheel-rear"><use href="#spokes" x="380" y="390"/></g>
+    <g class="wheel-front"><use href="#spokes" x="650" y="390"/></g>
+    <circle cx="380" cy="390" r="9" fill="#34545b"/>
+    <circle cx="650" cy="390" r="9" fill="#34545b"/>
+  </g>
+
+  <!-- Frame, fork, saddle and handlebars -->
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M380 390 485 301 540 358 380 390
+             M485 301 608 301 540 358 650 390
+             M608 301 650 390"
+          stroke="#245b64" stroke-width="11"/>
+    <path d="M380 390 485 301 540 358 380 390
+             M485 301 608 301 540 358 650 390
+             M608 301 650 390"
+          stroke="#55a5a0" stroke-width="6"/>
+    <path d="M607 301 625 251q3-9 13-9h27" stroke="#34545b" stroke-width="9"/>
+    <path d="M649 242h17" stroke="#c47d54" stroke-width="12"/>
+    <path d="M485 301 480 284" stroke="#34545b" stroke-width="8"/>
+    <path d="M454 284q24-9 54-2" stroke="#34545b" stroke-width="10"/>
+    <path d="M458 281q23-8 46-3" stroke="#b77957" stroke-width="5"/>
+    <path d="M634 355q20-11 39-1" stroke="#e9f0df" stroke-width="4" opacity=".75"/>
+  </g>
+
+  <!-- Rear leg, behind the body -->
+  <path fill="none" stroke="#b5a681" stroke-width="17" stroke-linecap="round"
+        stroke-linejoin="round"
+        d="M471 260 Q509 283 520 290 Q543 303 540 328">
+    <animate attributeName="d" dur="1.2s" repeatCount="indefinite"
+      keyTimes="0;.25;.5;.75;1"
+      values="
+      M471 260 Q509 283 520 290 Q543 303 540 328;
+      M471 260 Q523 274 543 303 Q567 324 570 358;
+      M471 260 Q493 299 512 323 Q535 353 540 388;
+      M471 260 Q489 295 499 317 Q511 337 510 358;
+      M471 260 Q509 283 520 290 Q543 303 540 328"/>
+  </path>
+
+  <!-- The bird moves subtly while pedaling. -->
+  <g class="bird">
+    <!-- Tail feathers -->
+    <path d="M436 211q-39-1-65-24 5 27 38 43-30-4-52-17 12 32 63 36Z"
+          fill="#d4c9a8" stroke="#b7ad8e" stroke-width="2"/>
+    <path d="M439 218q-32 1-58-12" fill="none" stroke="#fff7dd" stroke-width="7"
+          stroke-linecap="round"/>
+
+    <!-- Body and long neck -->
+    <path d="M428 201q20-42 84-44 40-2 57 36
+             13 27-11 56-27 33-72 32-45 0-66-30-17-24 8-50Z"
+          fill="url(#body)" stroke="#b9ad8c" stroke-width="3"/>
+    <path d="M527 186q30-22 35-57 5-28 29-29
+             24 0 24 24-1 16-18 24-10 5-12 24
+             -2 31-22 54-17 19-43 20Z"
+          fill="#fff8df" stroke="#b9ad8c" stroke-width="3"/>
+    <path d="M547 190q26-16 29-49" fill="none" stroke="#e5d7b0"
+          stroke-width="8" stroke-linecap="round" opacity=".7"/>
+
+    <!-- Eye and expressive brow -->
+    <ellipse cx="596" cy="125" rx="8" ry="10" fill="#fffdf1"/>
+    <circle cx="599" cy="126" r="4.4" fill="#303e43"/>
+    <circle cx="600.5" cy="124.5" r="1.5" fill="white"/>
+    <path d="M588 109q9-5 18 0" fill="none" stroke="#8c816a"
+          stroke-width="3" stroke-linecap="round"/>
+
+    <!-- The soft throat pouch hangs beneath the upper beak. -->
+    <path d="M608 143q32 13 85 13
+             -4 34-30 51-25 12-42-10-15-19-13-54Z"
+          fill="url(#pouch)" stroke="#bf7851" stroke-width="3"/>
+    <path d="M609 145q41-7 92 9-8 10-27 11-35-2-65-11Z"
+          fill="#efac68" stroke="#ad744e" stroke-width="2"/>
+    <path d="M611 142q45-9 94 9-25 3-48 2-28-2-46-6Z"
+          fill="#f7ce82" stroke="#ad744e" stroke-width="2"/>
+    <path d="M632 190q20 13 38-3" fill="none" stroke="#e9a16a"
+          stroke-width="3" stroke-linecap="round" opacity=".65"/>
+
+    <!-- Folded wing -->
+    <g class="wing">
+      <path d="M440 201q33-31 75-20 34 10 43 38
+               -20 25-59 31-44 5-65-18-8-12 6-31Z"
+            fill="#eee4c4" stroke="#bdb193" stroke-width="3"/>
+      <path d="M451 227q26 26 75 12M451 213q34 20 76 17M474 194q31 2 51 20"
+            fill="none" stroke="#d4c8a8" stroke-width="3" stroke-linecap="round"/>
+      <path d="M438 230q18 24 44 27" fill="none" stroke="#fff8dd"
+            stroke-width="6" stroke-linecap="round"/>
+    </g>
+
+    <!-- Near hip remains visible over the frame. -->
+    <ellipse cx="496" cy="267" rx="17" ry="13" fill="#e6d5ad"/>
+  </g>
+
+  <!-- Crank and pedals rotate in step with both animated legs. -->
+  <g class="crank" stroke="#344c54" stroke-linecap="round">
+    <path d="M540 328v60" stroke-width="7"/>
+    <path d="M528 328h24M528 388h24" stroke-width="8"/>
+  </g>
+  <circle cx="540" cy="358" r="10" fill="#f5cd79" stroke="#34545b" stroke-width="4"/>
+
+  <!-- Near leg: the changing knee and ankle positions follow the near pedal. -->
+  <path fill="none" stroke="#d7a96e" stroke-width="19" stroke-linecap="round"
+        stroke-linejoin="round"
+        d="M501 270 Q546 281 554 314 Q546 354 540 388">
+    <animate attributeName="d" dur="1.2s" repeatCount="indefinite"
+      keyTimes="0;.25;.5;.75;1"
+      values="
+      M501 270 Q546 281 554 314 Q546 354 540 388;
+      M501 270 Q535 302 545 330 Q528 353 510 358;
+      M501 270 Q535 290 555 306 Q557 319 540 328;
+      M501 270 Q546 288 565 320 Q575 340 570 358;
+      M501 270 Q546 281 554 314 Q546 354 540 388"/>
+  </path>
+  <path fill="none" stroke="#f5e4b7" stroke-width="8" stroke-linecap="round"
+        d="M501 270 Q546 281 554 314 Q546 354 540 388">
+    <animate attributeName="d" dur="1.2s" repeatCount="indefinite"
+      keyTimes="0;.25;.5;.75;1"
+      values="
+      M501 270 Q546 281 554 314 Q546 354 540 388;
+      M501 270 Q535 302 545 330 Q528 353 510 358;
+      M501 270 Q535 290 555 306 Q557 319 540 328;
+      M501 270 Q546 288 565 320 Q575 340 570 358;
+      M501 270 Q546 281 554 314 Q546 354 540 388"/>
+  </path>
+
+  <!-- A few static highlights finish the foreground. -->
+  <path d="M264 449h29M734 450h21" stroke="#fff4d8" stroke-width="3"
+        stroke-linecap="round" opacity=".7"/>
+</svg>
+</body>
+</html>

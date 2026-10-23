@@ -1,0 +1,721 @@
+/* Paper, ink and a restrained sky-blue accent across the working console. */
+:is(.console-signal, body:has(.console-signal) > .modal-overlay, body:has(.console-signal) > .dialog-overlay, body:has(.console-signal) > .select-dropdown-portal, body:has(.console-signal) > .account-popover) {
+  /* 这一层现在只做「换名」：值全部转发到 design-system.css 的 --ds-*，
+     所以整站换肤只需改 design-system.css + tailwind.config.js 两处。
+     曾经这里是一套独立的纸感蓝主题（--signal-accent #007db5），
+     结果是控制台和公开页长得像两个站点。 */
+  --signal-bg: var(--ds-bg);
+  --signal-surface: var(--ds-surface);
+  --signal-raised: var(--ds-surface-muted);
+  --signal-sidebar: var(--ds-surface);
+  --signal-line: var(--ds-border);
+  --signal-text: var(--ds-ink);
+  --signal-muted: var(--ds-ink-muted);
+  --signal-accent: var(--ds-primary);
+  --signal-amber: var(--ds-warn);
+  --signal-hover: var(--ds-table-row-hover);
+  --signal-accent-soft: var(--ds-primary-soft);
+  --signal-on-accent: var(--ds-on-primary);
+  --signal-control-line: var(--ds-border-strong);
+  --signal-highlight: var(--ds-surface);
+  --signal-inset: var(--ds-surface-sunken);
+  --signal-divider: var(--ds-divider);
+  --signal-shadow: var(--ds-shadow-xs);
+  --signal-popover-shadow: var(--ds-shadow-menu);
+  --signal-command: var(--ds-ink);
+  --signal-command-text: var(--ds-surface);
+  /* 反色卡片上的强调色：卡片本身在两种皮肤下都是"反色"的，所以强调色也要跟着反。 */
+  --signal-accent-on-command: #a6b2ff;
+  --signal-paper-image: url('../assets/console-paper.webp');
+  --signal-paper-blend: multiply;
+  --signal-paper-opacity: 0.46;
+  --signal-draft-opacity: 1;
+  --signal-draft-ink: color-mix(in srgb, var(--ds-primary) 20%, transparent);
+  --signal-draft-line: color-mix(in srgb, var(--ds-primary) 30%, transparent);
+  /* 动效 token 统一在 design-system.css（--ds-ease-* / --ds-dur-*），
+     本文件原先另立了一套 --motion-*，与本文件的入场动画一起删掉了。 */
+  --signal-display-font: Georgia, 'Noto Serif SC', 'Source Han Serif SC', 'Songti SC', SimSun, serif;
+  /* Route through the design-system token so the console chrome inherits the
+     brand webfont. Re-declaring a system stack here silently outranked body's
+     --ds-font-sans, which is what made the console look like a different site
+     from the public pages. The serif --signal-display-font above is a
+     deliberate editorial accent and is intentionally left as-is. */
+  font-family: var(--ds-font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+.dark :is(.console-signal, body:has(.console-signal) > .modal-overlay, body:has(.console-signal) > .dialog-overlay, body:has(.console-signal) > .select-dropdown-portal, body:has(.console-signal) > .account-popover) {
+  --signal-bg: var(--ds-bg);
+  --signal-surface: var(--ds-surface);
+  --signal-raised: var(--ds-surface-muted);
+  --signal-sidebar: var(--ds-surface);
+  --signal-line: var(--ds-border);
+  --signal-text: var(--ds-ink);
+  --signal-muted: var(--ds-ink-muted);
+  --signal-accent: var(--ds-primary);
+  --signal-amber: var(--ds-warn);
+  --signal-hover: var(--ds-table-row-hover);
+  --signal-accent-soft: var(--ds-primary-soft);
+  --signal-on-accent: var(--ds-on-primary);
+  --signal-control-line: var(--ds-border-strong);
+  --signal-highlight: rgba(255, 255, 255, 0.06);
+  --signal-inset: var(--ds-surface-sunken);
+  --signal-divider: var(--ds-divider);
+  --signal-shadow: var(--ds-shadow-sm);
+  --signal-popover-shadow: var(--ds-shadow-menu);
+  --signal-command: var(--ds-ink);
+  --signal-command-text: var(--ds-surface);
+  --signal-accent-on-command: var(--ds-primary-active);
+  --signal-paper-image: url('../assets/console-paper-dark.webp');
+  --signal-paper-blend: screen;
+  --signal-paper-opacity: 0.32;
+  --signal-draft-opacity: 1;
+  --signal-draft-ink: color-mix(in srgb, var(--ds-primary) 18%, transparent);
+  --signal-draft-line: color-mix(in srgb, var(--ds-primary) 28%, transparent);
+
+}
+
+.console-signal .signal-sidebar {
+  background: var(--signal-sidebar);
+  border-color: var(--signal-line);
+}
+
+.console-signal {
+  position: relative;
+  isolation: isolate;
+}
+
+.console-signal .sidebar-header {
+  height: 64px;
+  padding-inline: 16px;
+  border-bottom-color: transparent;
+}
+
+.console-signal .sidebar-header-collapsed {
+  padding-inline: 16px;
+}
+
+.console-signal .signal-sidebar .sidebar-brand-title {
+  font-family: var(--signal-display-font);
+  font-size: 21px;
+  font-weight: 600;
+}
+
+.console-signal .sidebar-nav {
+  padding-inline: 12px;
+}
+
+.console-signal .signal-sidebar .sidebar-link {
+  min-height: 38px;
+  border: 1px solid transparent;
+  padding: 8px 10px;
+  font-size: 13px;
+  color: var(--signal-muted);
+  transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease;
+}
+
+.console-signal .signal-sidebar .sidebar-link-active {
+  background: var(--signal-accent-soft);
+  border-color: transparent;
+  color: var(--signal-accent);
+  box-shadow: none;
+}
+
+.console-signal .signal-sidebar .sidebar-link-active::before {
+  display: block;
+  width: 3px;
+  height: 14px;
+  border-radius: 0;
+  background: var(--signal-accent);
+}
+
+.console-signal .signal-sidebar .sidebar-link-active > svg {
+  color: var(--signal-accent);
+}
+
+.console-signal .signal-sidebar .sidebar-link:hover {
+  background: var(--signal-hover);
+  color: var(--signal-text);
+}
+
+.console-signal .signal-header {
+  background: var(--signal-surface);
+  border-color: var(--signal-line);
+}
+
+.console-signal .header-inner { height: 56px; }
+
+@media (min-width: 1024px) {
+  .console-signal { --signal-nav-size: 256px; }
+  .console-signal.signal-nav-collapsed { --signal-nav-size: 72px; }
+  .console-signal .signal-sidebar { width: var(--signal-nav-size); }
+  .console-signal .signal-frame { margin-left: var(--signal-nav-size); }
+  .console-signal .signal-main { padding: 24px; }
+  .console-signal .header-inner { padding-inline: 24px; }
+}
+
+.console-signal :is(.header-avatar, .header-balance) {
+  box-shadow: inset 0 1px 0 var(--signal-highlight);
+}
+
+.console-signal .signal-main {
+  max-width: 1680px;
+}
+
+.console-signal .signal-main:has(> .signal-usage, > .admin-usage-workbench, > .accounts-workspace) {
+  max-width: none;
+}
+
+.console-signal .signal-main:has(.accounts-workspace) {
+  width: 100%;
+  max-width: none;
+}
+
+.console-signal :is(.signal-masthead, .signal-workspace-heading, .signal-channel-masthead, .signal-account-heading) {
+  padding-bottom: 22px;
+}
+
+.console-signal :is(h1, h2, h3) {
+  letter-spacing: 0;
+}
+
+.console-signal :is(.signal-heading h1, .signal-workspace-heading h1, .signal-account-heading h1, .signal-channel-heading h1, .signal-payment-heading h1) {
+  font-family: var(--signal-display-font);
+  font-size: 26px;
+  line-height: 34px;
+  font-weight: 600;
+}
+
+.console-signal :is(.signal-mark, .signal-channel-mark, .signal-payment-heading__icon, .admin-overview-mark) {
+  border-radius: 8px;
+  background: var(--signal-accent-soft);
+  box-shadow: none;
+}
+
+:is(.console-signal, body:has(.console-signal) > .modal-overlay, body:has(.console-signal) > .dialog-overlay) :is(.btn, .input, .select-trigger) {
+  border-radius: 8px;
+}
+
+:is(.console-signal, body:has(.console-signal) > .modal-overlay, body:has(.console-signal) > .dialog-overlay) .btn-secondary {
+  background: var(--signal-surface);
+  border-color: var(--signal-line);
+  box-shadow: none;
+}
+
+:is(.console-signal, body:has(.console-signal) > .modal-overlay, body:has(.console-signal) > .dialog-overlay) .btn-secondary:hover:not(:disabled) {
+  border-color: var(--signal-control-line);
+  background: var(--signal-hover);
+}
+
+:is(.console-signal, body:has(.console-signal) > .modal-overlay, body:has(.console-signal) > .dialog-overlay) .btn-primary {
+  border: 1px solid var(--signal-command);
+  background: var(--signal-command);
+  color: var(--signal-command-text);
+  box-shadow: none;
+}
+
+:is(.console-signal, body:has(.console-signal) > .modal-overlay, body:has(.console-signal) > .dialog-overlay) .btn-primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--signal-command) 88%, var(--signal-bg));
+  color: var(--signal-command-text);
+}
+
+:is(.console-signal, body:has(.console-signal) > .modal-overlay, body:has(.console-signal) > .dialog-overlay) .input {
+  background: var(--signal-surface);
+  box-shadow: none;
+}
+
+:is(.console-signal, body:has(.console-signal) > .modal-overlay, body:has(.console-signal) > .dialog-overlay) .select-trigger {
+  box-shadow: none;
+}
+
+:is(.console-signal, body:has(.console-signal) > .modal-overlay, body:has(.console-signal) > .dialog-overlay) :is(.input:focus, .select-trigger-open) {
+  box-shadow: inset 0 1px 2px #00000008, 0 0 0 3px color-mix(in srgb, var(--signal-accent) 14%, transparent);
+}
+
+:is(.console-signal, body:has(.console-signal) > .modal-overlay, body:has(.console-signal) > .dialog-overlay) .btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+/* Floating controls need separation; page sections keep their own flat layout. */
+:is(.console-signal, body:has(.console-signal) > .modal-overlay, body:has(.console-signal) > .dialog-overlay) :is(.dropdown, .modal-content, .dialog-container),
+body:has(.console-signal) > .select-dropdown-portal {
+  box-shadow: inset 0 1px 0 var(--signal-highlight), var(--signal-popover-shadow);
+}
+
+:is(.console-signal, body:has(.console-signal) > .modal-overlay, body:has(.console-signal) > .dialog-overlay) :is(.modal-footer, .dialog-footer) {
+  background: var(--signal-inset);
+}
+
+.console-signal :is(.signal-value, .signal-reading-value, .admin-metric-grid, .table-pagination) {
+  font-variant-numeric: lining-nums tabular-nums;
+}
+
+.console-signal .signal-dashboard .signal-stats { display: block; }
+.console-signal .signal-dashboard .signal-masthead { padding-bottom: 20px; border: 0; }
+.console-signal .signal-dashboard .signal-lead-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.7fr); gap: 14px; }
+.console-signal .signal-dashboard .signal-lead-grid--simple { grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); }
+.console-signal .signal-dashboard .signal-stat-strip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin-top: 16px; border: 0; background: transparent; box-shadow: none; }
+.console-signal .signal-dashboard .signal-stat-strip--models { grid-template-columns: repeat(4, minmax(0, 1fr)) minmax(205px, 1.35fr); }
+.console-signal .signal-dashboard .signal-metric {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 20px;
+  border: 1px solid var(--signal-line);
+  border-radius: 12px;
+  background: var(--signal-surface);
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04), 0 1px 2px -1px rgba(0, 0, 0, 0.02);
+  transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease;
+}
+.console-signal .signal-dashboard .signal-metric:hover {
+  border-color: var(--signal-control-line);
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.07), 0 8px 10px -6px rgba(0, 0, 0, 0.04);
+  transform: translateY(-1px);
+}
+.console-signal .signal-dashboard .signal-lead-grid > .signal-metric { min-height: 164px; }
+.console-signal .signal-dashboard .signal-value { margin: 12px 0 0; color: var(--signal-text); font-size: 26px; font-weight: 650; line-height: 32px; font-variant-numeric: tabular-nums; }
+.console-signal .signal-dashboard .signal-lead-grid .signal-value { font-size: 30px; line-height: 36px; }
+.console-signal .signal-dashboard .signal-metric--balance .signal-value { color: var(--signal-accent); }
+.console-signal .signal-dashboard .signal-value small { font-size: 14px; font-weight: 400; color: var(--signal-muted); }
+.console-signal .signal-dashboard .signal-metric--cost .signal-value { color: var(--signal-amber); }
+.console-signal .signal-dashboard .signal-label { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 550; color: var(--signal-muted); }
+.console-signal .signal-dashboard .signal-label > svg { display: inline-block; flex-shrink: 0; opacity: 0.85; }
+.console-signal .signal-dashboard .signal-metric-foot { display: flex; flex-direction: column; gap: 3px; min-height: 54px; margin: auto -18px -18px; padding: 11px 18px; border-top: 1px solid var(--signal-line); background: transparent; font-size: 11px; font-variant-numeric: tabular-nums; color: var(--signal-muted); overflow-wrap: anywhere; }
+.console-signal .signal-dashboard .signal-metric-foot strong { font-size: 12px; font-weight: 500; color: var(--signal-text); }
+.console-signal .signal-dashboard .signal-metric .signal-value { padding-bottom: 18px; }
+.console-signal .signal-dashboard .signal-token-split { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: auto; padding-top: 14px; border-top: 1px solid var(--signal-line); font-size: 11px; font-variant-numeric: tabular-nums; }
+.console-signal .signal-dashboard .signal-token-split dt { color: var(--signal-muted); }
+.console-signal .signal-dashboard .signal-token-split dd { margin-top: 5px; color: var(--signal-text); overflow-wrap: anywhere; }
+.console-signal .signal-dashboard .signal-actions { display: flex; flex-direction: column; align-items: stretch; gap: 14px; padding: 12px 4px 0 12px; }
+.console-signal .signal-dashboard .signal-actions-label { display: block; padding: 0; color: var(--signal-text); font-size: 14px; font-weight: 600; }
+.console-signal .signal-dashboard .signal-actions-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); width: 100%; gap: 8px 16px; }
+.console-signal .signal-dashboard .signal-actions button { display: flex; align-items: center; justify-content: flex-start; min-width: 0; min-height: 48px; gap: 10px; padding: 8px 0; border-radius: 0; border-bottom: 1px solid var(--signal-line); background: transparent; color: var(--signal-text); text-align: left; font-size: 12px; }
+.console-signal .signal-dashboard .signal-actions button span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.console-signal .signal-dashboard .signal-actions button svg { color: var(--signal-muted); flex-shrink: 0; }
+.console-signal .signal-dashboard .signal-actions button:hover { color: var(--signal-accent); border-color: var(--signal-control-line); }
+.console-signal .signal-dashboard .signal-telemetry { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 10px 24px; margin-top: 12px; padding: 0; border: 0; }
+.console-signal .signal-dashboard .signal-telemetry .signal-reading { display: flex; align-items: baseline; flex-wrap: wrap; gap: 7px; padding: 0; border: 0; }
+.console-signal .signal-dashboard .signal-reading-value { margin: 0; font-size: 12px; font-weight: 500; }
+.console-signal .signal-dashboard .signal-platform-grid { gap: 12px; padding-block: 12px 20px; }
+.console-signal .signal-dashboard .signal-platform {
+  padding: 18px;
+  border: 1px solid var(--signal-line);
+  border-radius: 12px;
+  background: var(--signal-surface);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04), 0 1px 2px -1px rgba(0, 0, 0, 0.02);
+  transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease;
+}
+.console-signal .signal-dashboard .signal-platform:hover {
+  border-color: var(--signal-control-line);
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.07), 0 8px 10px -6px rgba(0, 0, 0, 0.04);
+  transform: translateY(-1px);
+}
+.console-signal .signal-dashboard .signal-platform-heading { margin-bottom: 14px; }
+
+@media (max-width: 1279px) {
+  .console-signal .signal-dashboard .signal-lead-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .console-signal .signal-dashboard .signal-actions { grid-column: 1 / -1; padding: 4px 0 0; }
+  .console-signal .signal-dashboard .signal-actions-list { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .console-signal .signal-dashboard .signal-stat-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .console-signal .signal-dashboard .signal-model-card { grid-column: 1 / -1; }
+  .console-signal .signal-dashboard .signal-model-summary { max-width: 400px; }
+}
+
+@media (max-width: 479px) {
+  .console-signal .signal-dashboard .signal-metric { padding: 14px; }
+  .console-signal .signal-dashboard .signal-metric-foot { margin-inline: -14px; margin-bottom: -14px; padding-inline: 14px; }
+  .console-signal .signal-dashboard .signal-lead-grid .signal-value { font-size: 23px; }
+  .console-signal .signal-dashboard .signal-value { font-size: 22px; }
+  .console-signal .signal-dashboard .signal-actions-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .console-signal .signal-dashboard .signal-telemetry { justify-content: flex-start; }
+  .console-signal .signal-dashboard .signal-lead-grid--simple > .signal-metric { grid-column: 1 / -1; }
+}
+
+.console-signal .signal-payment :is(.payment-method-selector__option, .payment-amount-input__option):not([aria-pressed='true']) {
+  background: var(--signal-surface);
+  border-color: var(--signal-line);
+  box-shadow: none;
+}
+
+.console-signal .signal-payment :is(.payment-method-selector__option, .payment-amount-input__option)[aria-pressed='true'] {
+  color: var(--signal-text);
+  border-color: var(--signal-accent);
+  background: var(--signal-accent-soft);
+  box-shadow: inset 0 1px 0 var(--signal-highlight), inset 0 -2px var(--signal-accent);
+}
+
+.console-signal .signal-payment :is(.payment-method-selector__option, .payment-amount-input__option):hover:not(:disabled):not([aria-pressed='true']) {
+  border-color: var(--signal-control-line);
+}
+
+.console-signal .signal-checkout-summary {
+  box-shadow: inset 0 1px 0 var(--signal-highlight), var(--signal-shadow);
+}
+
+.console-signal .signal-checkout-summary__header {
+  background: var(--signal-raised);
+}
+
+.console-signal .signal-payment [data-testid='payment-method-label'] {
+  overflow: visible;
+  white-space: normal;
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.console-signal .signal-profile :is(.rounded-3xl, .rounded-2xl) {
+  border-radius: 8px;
+}
+
+.console-signal.signal-admin .signal-admin-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--signal-text);
+}
+
+.console-signal.signal-admin .table-page-layout {
+  gap: 16px;
+  min-width: 0;
+}
+
+.console-signal.signal-admin .signal-main .table-page-layout .table-scroll-container {
+  border: 1px solid var(--signal-line);
+  border-radius: 8px;
+  box-shadow: inset 0 1px 0 var(--signal-highlight), var(--signal-shadow);
+}
+
+.console-signal.signal-admin .table-scroll-container :is(th, td) {
+  padding: 12px 14px;
+  font-size: 13px;
+}
+
+.console-signal.signal-admin .table-scroll-container tr:hover td {
+  background-color: var(--signal-hover);
+}
+
+.console-signal.signal-admin .table-scroll-container tbody tr:has(input[data-test='select-row']:checked) td,
+.console-signal.signal-admin .accounts-table-stage tbody tr:has(td:first-child > input[type='checkbox']:checked) td {
+  background-color: var(--signal-accent-soft);
+}
+
+.console-signal .accounts-table-stage > .space-y-3 > .rounded-lg {
+  background: var(--signal-surface);
+  border-color: var(--signal-line);
+}
+
+.console-signal .accounts-table-stage > .space-y-3 > .rounded-lg:has([data-field='select'] input:checked) {
+  background: var(--signal-accent-soft);
+  border-color: var(--signal-accent);
+}
+
+.console-signal .signal-main .table-wrapper :is(.sticky-col-left, .sticky-col-left-second)::after,
+.console-signal .signal-main .table-wrapper .sticky-col-right::before {
+  width: 6px;
+  opacity: 0.6;
+}
+
+.console-signal .table-body > tr + tr {
+  border-color: var(--signal-divider);
+}
+
+.console-signal .table-pagination {
+  border-color: var(--signal-line);
+  background: transparent;
+  padding-inline: 0;
+}
+
+.console-signal .table-pagination nav {
+  gap: 4px;
+  box-shadow: none;
+}
+
+.console-signal .table-pagination button:not(.btn) {
+  min-width: 34px;
+  min-height: 36px;
+  margin-left: 0;
+  border: 1px solid var(--signal-line);
+  border-radius: 6px;
+  background: var(--signal-surface);
+  color: var(--signal-muted);
+}
+
+.console-signal .table-pagination button:hover:not(:disabled) {
+  background: var(--signal-hover);
+  color: var(--signal-text);
+}
+
+.console-signal .table-pagination button[aria-current='page'] {
+  background: var(--signal-accent-soft);
+  border-color: var(--signal-accent);
+  color: var(--signal-accent);
+  box-shadow: inset 0 1px 0 var(--signal-highlight);
+}
+
+.console-signal.signal-admin :is(.text-gray-900, .text-gray-800, .text-gray-700) {
+  color: var(--signal-text);
+}
+
+.console-signal.signal-admin :is(.text-gray-500, .text-gray-400, .text-gray-600) {
+  color: var(--signal-muted);
+}
+
+.console-signal.signal-admin .card {
+  border-color: var(--signal-line);
+  background-color: var(--signal-surface);
+}
+
+.console-signal .admin-overview-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--signal-line);
+}
+
+.admin-overview-identity { display: flex; align-items: center; gap: 14px; min-width: 0; }
+.admin-overview-mark { display: grid; place-items: center; width: 40px; height: 40px; border: 1px solid var(--signal-line); color: var(--signal-accent); }
+.admin-overview-label { font-size: 10px; color: var(--signal-muted); }
+.admin-overview-identity p { margin-top: 4px; font-size: 25px; line-height: 32px; font-weight: 600; }
+
+.console-signal .admin-metric-grid > .card {
+  padding: 20px;
+  background: var(--signal-surface);
+}
+
+.console-signal .admin-metric-grid > .card > div {
+  align-items: flex-start;
+}
+
+.console-signal .admin-metric-grid > .card > div > div + div { min-width: 0; }
+.console-signal .admin-metric-grid .text-xl { margin-block: 8px 4px; font-size: 26px; font-weight: 600; overflow-wrap: anywhere; }
+.console-signal .admin-metric-grid-secondary .text-xl { font-size: 21px; }
+
+.console-signal .admin-dashboard-shortcuts {
+  padding-block: 12px;
+  border-block: 1px solid var(--signal-line);
+}
+
+.console-signal .admin-dashboard-shortcuts > div + div {
+  display: flex;
+  flex-wrap: wrap;
+}
+
+.console-signal .admin-dashboard-shortcuts button {
+  flex: 1 1 240px;
+  border: 1px solid var(--signal-line);
+  background: var(--signal-surface);
+}
+
+.console-signal .admin-chart-toolbar {
+  padding-block: 4px 16px;
+  border-bottom: 1px solid var(--signal-line);
+}
+
+.console-signal .admin-dashboard-charts > .grid > .card,
+.console-signal .admin-dashboard-charts > .card {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+@media (max-width: 639px) {
+  .console-signal .table-pagination button:not(.btn) { min-height: 44px; }
+  .console-signal .signal-sidebar .sidebar-link { min-height: 44px; }
+  .console-signal .admin-metric-grid { gap: 10px; }
+  .console-signal .admin-metric-grid > .card { padding: 14px 12px; }
+  .console-signal .admin-metric-grid > .card > div { flex-direction: column; gap: 8px; }
+  .console-signal .admin-chart-toolbar .ml-auto { margin-left: 0; }
+  .console-signal.signal-admin .table-page-layout.mobile-mode { height: auto; min-height: calc(100dvh - 120px); }
+  .console-signal.signal-admin .signal-main .table-page-layout.mobile-mode .table-scroll-container { border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+}
+
+@media (max-width: 479px) {
+  .console-signal .header-actions { gap: 0; }
+  .console-signal .header-actions > :is(button, div) > button,
+  .console-signal .header-actions > button {
+    min-width: 36px;
+    min-height: 40px;
+    padding-inline: 6px;
+  }
+  .console-signal .header-subscriptions > button > div { display: none; }
+  .console-signal .header-locale > button > svg { display: none; }
+  .console-signal .header-identity { max-width: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :is(.console-signal, body:has(.console-signal) > .modal-overlay, body:has(.console-signal) > .dialog-overlay) .btn:active:not(:disabled) { transform: none; }
+  .console-signal .signal-dashboard .signal-actions button { transition: none; }
+}
+
+.console-signal .plaza-pricing-table :is(th, td) {
+  border-color: var(--signal-line);
+}
+
+.console-signal .plaza-pricing-table tbody tr:hover {
+  background: var(--signal-hover);
+}
+
+.console-signal .plaza-pricing-table :is(.text-gray-400, .text-gray-500, .pz-unit) {
+  color: var(--signal-muted);
+}
+
+.console-signal .custom-page-layout > .card,
+.console-signal .canvas-page-layout > .card {
+  border: 1px solid var(--signal-line);
+  border-radius: 8px;
+  background: var(--signal-surface);
+  box-shadow: none;
+}
+
+.console-signal .signal-editorial-heading,
+.console-signal .signal-editorial-heading.signal-masthead {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 116px;
+  padding: 20px 0 26px;
+  overflow: hidden;
+  border-bottom: 1px solid var(--signal-line);
+  margin-bottom: 24px;
+}
+
+.console-signal .signal-editorial-copy {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+
+.console-signal .signal-dashboard .signal-editorial-heading h1,
+.console-signal .model-plaza-content .signal-editorial-heading h1 {
+  margin-top: 12px;
+  font-family: var(--signal-display-font);
+  font-size: 32px;
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: 0;
+  overflow-wrap: anywhere;
+}
+
+.console-signal .signal-editorial-heading p {
+  margin-top: 12px;
+  color: var(--signal-muted);
+  font-size: 13px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.console-signal .signal-editorial-index {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-family: var(--ds-font-mono);
+  font-size: 10px;
+  color: var(--signal-muted);
+}
+
+.console-signal .signal-editorial-index::before {
+  content: '';
+  width: 5px;
+  height: 5px;
+  flex-shrink: 0;
+  background: var(--signal-accent);
+}
+
+.console-signal .signal-editorial-heading > button {
+  position: relative;
+  align-self: flex-end;
+  flex-shrink: 0;
+}
+
+.console-signal .signal-dashboard .signal-lead-grid {
+  gap: 18px;
+  margin-top: 4px;
+}
+
+.console-signal .signal-dashboard .signal-metric--balance {
+  background: var(--signal-command);
+  border-color: var(--signal-command);
+  color: var(--signal-command-text);
+}
+
+.console-signal .signal-dashboard .signal-metric--balance :is(.signal-value, .signal-metric-foot strong) {
+  color: var(--signal-command-text);
+}
+
+.console-signal .signal-dashboard .signal-metric--balance :is(.signal-label, .signal-metric-foot) {
+  color: color-mix(in srgb, var(--signal-command-text) 72%, transparent);
+  border-color: color-mix(in srgb, var(--signal-command-text) 14%, transparent);
+}
+
+.console-signal .signal-dashboard .signal-metric--balance .signal-label > span {
+  color: var(--signal-accent-on-command);
+}
+
+.console-signal .admin-overview-identity p {
+  font-family: var(--signal-display-font);
+}
+
+.console-signal .plaza-group {
+  box-shadow: none;
+}
+
+.console-signal .plaza-group-header {
+  background: var(--signal-surface);
+  border-top: 2px solid var(--signal-control-line);
+}
+
+.console-signal .signal-editorial-heading::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 72px;
+  height: 1px;
+  background: var(--signal-accent);
+  transform-origin: left;
+}
+
+/* 入场与 hover 动效统一由 animations.css 的 auto-apply 层提供（:where() 零特异性）。
+   这里只保留两处本文件独有的表现：编辑风标题下的短横线展开，以及侧栏图标的位移。 */
+@media (prefers-reduced-motion: no-preference) {
+  .console-signal .signal-editorial-heading::after {
+    animation: console-line-enter var(--ds-dur-slower) var(--ds-ease-expo) backwards;
+  }
+
+  .console-signal .signal-sidebar .sidebar-link > svg {
+    transition: transform var(--ds-dur-base) var(--ds-ease-expo), color var(--ds-dur-fast) linear;
+  }
+
+  .console-signal .signal-actions button > svg:last-child {
+    transition: transform var(--ds-dur-base) var(--ds-ease-expo);
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .console-signal .signal-sidebar .sidebar-link:hover > svg { transform: translateX(3px); }
+    .console-signal .signal-actions button:hover > svg:last-child { transform: translateX(5px); }
+  }
+}
+
+@keyframes console-line-enter {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+
+@media (max-width: 639px) {
+  .console-signal .signal-editorial-heading,
+  .console-signal .signal-editorial-heading.signal-masthead {
+    min-height: 112px;
+    padding-block: 18px;
+    margin-bottom: 20px;
+  }
+
+}

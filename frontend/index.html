@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/png" href="/logo.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      Brand webfont: preload the two tiers every page needs so the face is ready
+      before first paint. The third tier (extended) is deliberately NOT preloaded
+      — it is ~2.9 MB and only fetched when a rare character actually renders.
+      crossorigin is required because fonts are always fetched in CORS mode.
+    -->
+    <link
+      rel="preload"
+      href="/fonts/h1-latin.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
+    <link
+      rel="preload"
+      href="/fonts/h1-common.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
+    <title>Sub2API - AI API Gateway</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script nonce="__CSP_NONCE_VALUE__">
+      window.setTimeout(function () {
+        var el = document.getElementById('app')
+        if (!el || el.childElementCount > 0) return
+        el.innerHTML = '<div style="min-height:100dvh;display:flex;align-items:center;justify-content:center;padding:24px;text-align:center;font-family:\'Site Hanyi WenHei\',-apple-system,BlinkMacSystemFont,\'PingFang SC\',\'Microsoft YaHei\',sans-serif;color:#111">页面未加载完成，<a href="/">点击刷新</a></div>'
+      }, 8000)
+    </script>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

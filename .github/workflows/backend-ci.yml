@@ -1,0 +1,104 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  shell:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v6
+      - name: Check deployment scripts
+        run: |
+          /bin/bash -n deploy/apple-container.sh
+          /bin/bash deploy/tests/apple-container-test.sh
+          /bin/sh deploy/tests/docker-compose-security-test.sh
+          /bin/sh deploy/tests/docker-compose-gateway-env-test.sh
+          /bin/sh deploy/tests/docker-runtime-resources-test.sh
+          /bin/sh deploy/test-caddyfile-cache.sh
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: backend/go.mod
+          check-latest: false
+          cache: true
+          cache-dependency-path: backend/go.sum
+      - name: Verify Go version
+        run: |
+          go version | grep -q 'go1.26.10'
+      - name: Unit tests
+        working-directory: backend
+        run: make test-unit
+      - name: Integration tests
+        working-directory: backend
+        run: make test-integration
+      - name: Codex ticket concurrency regression
+        working-directory: backend
+        run: go test -race -tags=unit ./internal/service -run 'Test.*CodexTicket' -count=1
+      - name: Custom usage and upstream error concurrency regression
+        working-directory: backend
+        run: go test -race -p 1 -tags=unit ./internal/service ./internal/handler ./internal/handler/admin ./internal/repository -run 'Test(CustomUsage|CrossCustomUsage|AccountCustomUsage|.*UpstreamFinancial|.*FinancialError|.*FinancialStream)' -count=1
+      - name: Routing affinity concurrency regression
+        working-directory: backend
+        run: go test -race -p 1 -tags=unit ./internal/service ./internal/repository -run 'Test(UpstreamPreferences|UpstreamAffinity|FailedAffinity)' -count=1
+      - name: Billing and media concurrency regression
+        working-directory: backend
+        run: go test -race -p 1 -tags=unit ./internal/handler ./internal/service ./internal/repository -run 'Test(GrokVideoDurable|MediaBilling|AsyncImage|ImageTask|OpenAIResponsesWebSocket.*(Balance|Subscription|Settlement)|SmartBilling|.*Refund.*Pending)' -count=1
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 9
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+      - name: Frontend typecheck and critical vitest
+        run: make test-frontend
+      - name: Verify production frontend build
+        working-directory: frontend
+        run: pnpm run build
+      # 原先这里逐个 python3 执行 deploy/rollout/test_rollout329..336_guard.py。
+      # 这些脚本从未被 git 跟踪（它们只存在于 .artifacts/，而 .artifacts/ 在
+      # .gitignore 里），CI 的干净检出上根本不存在对应文件，于是这一步自 2026-09-27
+      # 起每次都以 "No such file or directory" 失败，把整个 CI 拖红。
+      # 其中 329~332、334~336 连本地 .artifacts/ 里都没有。
+      # 需要这些守卫回归进 CI，先把脚本提交到未被忽略的目录（如 deploy/tests/），
+      # 再在这里按实际路径调用。
+
+  golangci-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: backend/go.mod
+          check-latest: false
+          cache: true
+          cache-dependency-path: backend/go.sum
+      - name: Verify Go version
+        run: |
+          go version | grep -q 'go1.26.10'
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.13
+          args: --timeout=30m
+          working-directory: backend

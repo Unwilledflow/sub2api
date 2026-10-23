@@ -1,0 +1,41 @@
+import overview from './overview'
+import adaptive from './adaptive'
+import channels from './channels'
+import accounts from './accounts'
+import resources from './resources'
+import ops from './ops'
+import settings from './settings'
+import audit from './audit'
+import promptAudit from './promptAudit'
+import plugins from './plugins'
+
+export default {
+  ...overview,
+  ...adaptive,
+  ...channels,
+  ...accounts,
+  ...resources,
+  ...ops,
+  ...settings,
+  ...audit,
+  ...promptAudit,
+  ...plugins,
+  // resources.adaptive / antiStall overwrite the kedaya Adaptive module;
+  // re-merge so hybrid Adaptive keys win while resources-only copy is kept.
+  adaptive: {
+    ...resources.adaptive,
+    ...adaptive.adaptive
+  },
+  antiStall: {
+    ...adaptive.antiStall,
+    ...resources.antiStall
+  },
+  adaptiveGroups: {
+    title: 'Adaptive Groups',
+    description: 'Configure Adaptive parent groups and mixed-platform leaf pools.'
+  },
+  oauthAccounts: {
+    title: 'OAuth Accounts',
+    description: 'Manage OpenAI OAuth accounts independently from the main account list.'
+  }
+}

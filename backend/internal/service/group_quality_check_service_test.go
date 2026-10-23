@@ -1,0 +1,368 @@
+package service
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+)
+
+type stubGroupQualityCheckRepo struct {
+	settings map[int64]*GroupQualityCheckSettings
+	results  map[int64][]*GroupQualityCheckResult
+	buckets  map[int64][]GroupQualityBucketRow
+	events   map[int64][]*GroupQualityEvent
+	artworks map[int64]string
+}
+
+func newStubGroupQualityCheckRepo() *stubGroupQualityCheckRepo {
+	return &stubGroupQualityCheckRepo{
+		settings: make(map[int64]*GroupQualityCheckSettings),
+		results:  make(map[int64][]*GroupQualityCheckResult),
+		buckets:  make(map[int64][]GroupQualityBucketRow),
+		events:   make(map[int64][]*GroupQualityEvent),
+		artworks: make(map[int64]string),
+	}
+}
+
+func (r *stubGroupQualityCheckRepo) UpsertSettings(ctx context.Context, s *GroupQualityCheckSettings) (*GroupQualityCheckSettings, error) {
+	now := time.Now()
+	stored := &GroupQualityCheckSettings{
+		GroupID:         s.GroupID,
+		Enabled:         s.Enabled,
+		IntervalMinutes: s.IntervalMinutes,
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+	if existing, ok := r.settings[s.GroupID]; ok {
+		stored.CreatedAt = existing.CreatedAt
+		stored.LastRunAt = existing.LastRunAt
+	}
+	r.settings[s.GroupID] = stored
+	return stored, nil
+}
+
+func (r *stubGroupQualityCheckRepo) GetSettings(ctx context.Context, groupID int64) (*GroupQualityCheckSettings, error) {
+	if s, ok := r.settings[groupID]; ok {
+		return s, nil
+	}
+	return nil, errors.New("not found")
+}
+
+func (r *stubGroupQualityCheckRepo) ListAllSettings(ctx context.Context) ([]*GroupQualityCheckSettings, error) {
+	out := make([]*GroupQualityCheckSettings, 0, len(r.settings))
+	for _, s := range r.settings {
+		out = append(out, s)
+	}
+	return out, nil
+}
+
+func (r *stubGroupQualityCheckRepo) ListRecentResults(ctx context.Context, groupID int64, since time.Time, limit int) ([]*GroupQualityCheckResult, error) {
+	all := r.results[groupID]
+	out := make([]*GroupQualityCheckResult, 0, limit)
+	for i := len(all) - 1; i >= 0 && len(out) < limit; i-- {
+		if !all[i].CreatedAt.Before(since) {
+			out = append(out, all[i])
+		}
+	}
+	return out, nil
+}
+
+func (r *stubGroupQualityCheckRepo) ListGroupBuckets(ctx context.Context, groupIDs []int64, since time.Time, bucketSeconds int64) ([]GroupQualityBucketRow, error) {
+	var out []GroupQualityBucketRow
+	for _, id := range groupIDs {
+		out = append(out, r.buckets[id]...)
+	}
+	return out, nil
+}
+
+func (r *stubGroupQualityCheckRepo) ListGroupEvents(ctx context.Context, groupID int64, limit int) ([]*GroupQualityEvent, error) {
+	events := r.events[groupID]
+	if limit > 0 && len(events) > limit {
+		events = events[:limit]
+	}
+	return events, nil
+}
+
+func (r *stubGroupQualityCheckRepo) GetGroupEventArtwork(ctx context.Context, groupID, resultID int64) (string, error) {
+	text, ok := r.artworks[resultID]
+	if !ok {
+		return "", ErrGroupQualityEventNotFound
+	}
+	return text, nil
+}
+
+func (r *stubGroupQualityCheckRepo) addResult(groupID, accountID int64, status string, at time.Time) {
+	r.results[groupID] = append(r.results[groupID], &GroupQualityCheckResult{
+		GroupID:   groupID,
+		AccountID: accountID,
+		Status:    status,
+		CreatedAt: at,
+	})
+}
+
+func TestGroupQualityCheckService_GetGroupStatus_NeverConfigured(t *testing.T) {
+	svc := NewGroupQualityCheckService(newStubGroupQualityCheckRepo(), nil)
+	status, err := svc.GetGroupStatus(context.Background(), 7)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status.Enabled || status.Status != "unknown" {
+		t.Fatalf("never-configured group must report disabled/unknown, got %+v", status)
+	}
+}
+
+func TestGroupQualityCheckService_GetGroupStatus_Healthy(t *testing.T) {
+	repo := newStubGroupQualityCheckRepo()
+	svc := NewGroupQualityCheckService(repo, nil)
+	if _, err := svc.SetGroupEnabled(context.Background(), 1, true); err != nil {
+		t.Fatalf("enable: %v", err)
+	}
+	now := time.Now()
+	for i, st := range []string{"success", "success", "failed"} {
+		repo.addResult(1, int64(10+i), st, now)
+	}
+	status, err := svc.GetGroupStatus(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status.Status != "healthy" || status.CheckedAccounts != 2 || status.DegradedAccounts != 0 {
+		t.Fatalf("expected healthy 2/0 (transport failure excluded), got %+v", status)
+	}
+}
+
+func TestGroupQualityCheckService_GetGroupStatus_Inconclusive(t *testing.T) {
+	repo := newStubGroupQualityCheckRepo()
+	svc := NewGroupQualityCheckService(repo, nil)
+	if _, err := svc.SetGroupEnabled(context.Background(), 1, true); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	repo.addResult(1, 1, "unknown", now)
+	repo.addResult(1, 2, "failed", now)
+	status, err := svc.GetGroupStatus(context.Background(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Status != "unknown" || status.CheckedAccounts != 0 || status.LastRunAt == nil {
+		t.Fatalf("inconclusive probes must not imply healthy: %+v", status)
+	}
+	repo.addResult(1, 3, "degraded", now)
+	status, err = svc.GetGroupStatus(context.Background(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Status != "suspect" || status.CheckedAccounts != 1 || status.DegradedAccounts != 1 {
+		t.Fatalf("inconclusive probes must not dilute confirmed defects: %+v", status)
+	}
+}
+
+func TestGroupQualityCheckService_GetGroupStatus_Suspect(t *testing.T) {
+	repo := newStubGroupQualityCheckRepo()
+	svc := NewGroupQualityCheckService(repo, nil)
+	if _, err := svc.SetGroupEnabled(context.Background(), 2, true); err != nil {
+		t.Fatalf("enable: %v", err)
+	}
+	now := time.Now()
+	for i, st := range []string{"degraded", "degraded", "success"} {
+		repo.addResult(2, int64(20+i), st, now)
+	}
+	status, err := svc.GetGroupStatus(context.Background(), 2)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status.Status != "suspect" || status.DegradedAccounts != 2 {
+		t.Fatalf("expected suspect 2 degraded, got %+v", status)
+	}
+}
+
+func TestGroupQualityCheckService_GetGroupStatus_SingleDegradedOfManyIsHealthy(t *testing.T) {
+	repo := newStubGroupQualityCheckRepo()
+	svc := NewGroupQualityCheckService(repo, nil)
+	if _, err := svc.SetGroupEnabled(context.Background(), 5, true); err != nil {
+		t.Fatalf("enable: %v", err)
+	}
+	now := time.Now()
+	repo.addResult(5, 50, "degraded", now)
+	for i := 0; i < 9; i++ {
+		repo.addResult(5, int64(51+i), "success", now)
+	}
+	status, err := svc.GetGroupStatus(context.Background(), 5)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status.Status != "healthy" || status.DegradedAccounts != 1 {
+		t.Fatalf("1 degraded of 10 must stay healthy, got %+v", status)
+	}
+}
+
+func TestGroupQualityCheckService_GetGroupStatus_Disabled(t *testing.T) {
+	repo := newStubGroupQualityCheckRepo()
+	svc := NewGroupQualityCheckService(repo, nil)
+	if _, err := svc.SetGroupEnabled(context.Background(), 3, true); err != nil {
+		t.Fatalf("enable: %v", err)
+	}
+	if _, err := svc.SetGroupEnabled(context.Background(), 3, false); err != nil {
+		t.Fatalf("disable: %v", err)
+	}
+	status, err := svc.GetGroupStatus(context.Background(), 3)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status.Enabled || status.Status != "unknown" {
+		t.Fatalf("disabled group must report disabled/unknown, got %+v", status)
+	}
+}
+
+func TestGroupQualityCheckService_SetGroupEnabled_DefaultsInterval(t *testing.T) {
+	repo := newStubGroupQualityCheckRepo()
+	svc := NewGroupQualityCheckService(repo, nil)
+	settings, err := svc.SetGroupEnabled(context.Background(), 4, true)
+	if err != nil {
+		t.Fatalf("enable: %v", err)
+	}
+	if settings.IntervalMinutes != defaultGroupQualityCheckIntervalMinutes {
+		t.Fatalf("expected default interval %d, got %d", defaultGroupQualityCheckIntervalMinutes, settings.IntervalMinutes)
+	}
+}
+
+func TestGroupQualityCheckService_ListGroupSeries_OnlyEnabledGroups(t *testing.T) {
+	repo := newStubGroupQualityCheckRepo()
+	svc := NewGroupQualityCheckService(repo, nil)
+	if _, err := svc.SetGroupEnabled(context.Background(), 43, true); err != nil {
+		t.Fatalf("enable 43: %v", err)
+	}
+	if _, err := svc.SetGroupEnabled(context.Background(), 48, false); err != nil {
+		t.Fatalf("disable 48: %v", err)
+	}
+	now := time.Now()
+	repo.buckets[43] = []GroupQualityBucketRow{{GroupID: 43, BucketStart: now, Checked: 4, Degraded: 2, Failed: 1, Unknown: 0}}
+	repo.buckets[48] = []GroupQualityBucketRow{{GroupID: 48, BucketStart: now, Checked: 4, Degraded: 4}}
+
+	series, err := svc.ListGroupSeries(context.Background(), []int64{43, 48, 99}, time.Now().Add(-time.Hour), 300)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(series) != 1 {
+		t.Fatalf("only enabled groups may return series, got %d entries", len(series))
+	}
+	got, ok := series[43]
+	if !ok {
+		t.Fatalf("enabled group 43 missing from series")
+	}
+	if len(got.Buckets) != 1 || got.Buckets[0].Checked != 4 || got.Buckets[0].Degraded != 2 {
+		t.Fatalf("unexpected series payload: %+v", got)
+	}
+}
+
+func TestGroupQualityCheckService_ListGroupSeries_NoEnabledGroups(t *testing.T) {
+	svc := NewGroupQualityCheckService(newStubGroupQualityCheckRepo(), nil)
+	series, err := svc.ListGroupSeries(context.Background(), []int64{1, 2}, time.Now().Add(-time.Hour), 300)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(series) != 0 {
+		t.Fatalf("expected empty series, got %+v", series)
+	}
+}
+
+func TestGroupQualityCheckService_ListGroupSeries_SurfacesProbesWithoutSettings(t *testing.T) {
+	repo := newStubGroupQualityCheckRepo()
+	svc := NewGroupQualityCheckService(repo, nil)
+	now := time.Now()
+	repo.buckets[17] = []GroupQualityBucketRow{{GroupID: 17, BucketStart: now, Checked: 2, Degraded: 0, Failed: 1, Unknown: 1}}
+
+	series, err := svc.ListGroupSeries(context.Background(), []int64{17, 18}, now.Add(-time.Hour), 300)
+	require.NoError(t, err)
+	got, ok := series[17]
+	require.True(t, ok, "probes must surface even before the toggle table exists")
+	require.Len(t, got.Buckets, 1)
+	require.Equal(t, 1, got.Buckets[0].Failed)
+	require.Equal(t, 1, got.Buckets[0].Unknown)
+	_, hasEmpty := series[18]
+	require.False(t, hasEmpty)
+}
+
+func TestListGroupEventsOnlyWhenEnabled(t *testing.T) {
+	repo := newStubGroupQualityCheckRepo()
+	svc := NewGroupQualityCheckService(repo, nil)
+	repo.events[7] = []*GroupQualityEvent{{ID: 1, GroupID: 7, Status: "unknown"}}
+
+	events, err := svc.ListGroupEvents(context.Background(), 7, 30)
+	require.NoError(t, err)
+	require.Len(t, events, 1, "missing settings still lists scheduled-test probes")
+
+	repo.settings[7] = &GroupQualityCheckSettings{GroupID: 7, Enabled: true}
+	events, err = svc.ListGroupEvents(context.Background(), 7, 30)
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+
+	repo.settings[7].Enabled = false
+	events, err = svc.ListGroupEvents(context.Background(), 7, 30)
+	require.NoError(t, err)
+	require.Empty(t, events)
+}
+
+func TestGetGroupEventArtworkRequiresEnabledGroup(t *testing.T) {
+	repo := newStubGroupQualityCheckRepo()
+	svc := NewGroupQualityCheckService(repo, nil)
+	repo.artworks[11] = "<html></html>"
+
+	text, err := svc.GetGroupEventArtwork(context.Background(), 7, 11)
+	require.NoError(t, err)
+	require.Equal(t, "<html></html>", text, "missing settings still returns stored artwork")
+
+	repo.settings[7] = &GroupQualityCheckSettings{GroupID: 7, Enabled: true}
+	text, err = svc.GetGroupEventArtwork(context.Background(), 7, 11)
+	require.NoError(t, err)
+	require.Equal(t, "<html></html>", text)
+
+	repo.settings[7].Enabled = false
+	_, err = svc.GetGroupEventArtwork(context.Background(), 7, 11)
+	require.ErrorIs(t, err, ErrGroupQualityEventNotFound)
+
+	repo.settings[7].Enabled = true
+	_, err = svc.GetGroupEventArtwork(context.Background(), 7, 999)
+	require.ErrorIs(t, err, ErrGroupQualityEventNotFound)
+}
+
+type groupQualityAccountRepoStub struct {
+	AccountRepository
+	accounts []Account
+	cleared  []int64
+	enabled  []int64
+}
+
+func (s *groupQualityAccountRepoStub) ListByGroup(context.Context, int64) ([]Account, error) {
+	return s.accounts, nil
+}
+
+func (s *groupQualityAccountRepoStub) ClearTempUnschedulable(_ context.Context, id int64) error {
+	s.cleared = append(s.cleared, id)
+	return nil
+}
+
+func (s *groupQualityAccountRepoStub) SetSchedulable(_ context.Context, id int64, schedulable bool) error {
+	if schedulable {
+		s.enabled = append(s.enabled, id)
+	}
+	return nil
+}
+
+func TestGroupQualityCheckService_DisableClearsPausesAndReenables(t *testing.T) {
+	repo := newStubGroupQualityCheckRepo()
+	repo.settings[77] = &GroupQualityCheckSettings{GroupID: 77, Enabled: true}
+	accountRepo := &groupQualityAccountRepoStub{accounts: []Account{
+		{ID: 1, Schedulable: false, TempUnschedulableReason: scheduledQualityReasonPrefix + " plan=9"},
+		{ID: 2, Schedulable: true, TempUnschedulableReason: scheduledQualityReasonPrefix + " plan=9"},
+		{ID: 3, Schedulable: false, TempUnschedulableReason: "other reason"},
+	}}
+	svc := NewGroupQualityCheckService(repo, accountRepo)
+
+	_, err := svc.SetGroupEnabled(context.Background(), 77, false)
+	require.NoError(t, err)
+	require.Equal(t, []int64{1, 2}, accountRepo.cleared, "only quality-paused accounts are cleared")
+	require.Equal(t, []int64{1}, accountRepo.enabled, "a paused quality account is handed back to the scheduler")
+}

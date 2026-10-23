@@ -1,0 +1,168 @@
+package service
+
+import "time"
+
+// APIKeyAuthSnapshot API Key 认证缓存快照（仅包含认证所需字段）
+type APIKeyAuthSnapshot struct {
+	Version       int                      `json:"version"`
+	APIKeyID      int64                    `json:"api_key_id"`
+	UserID        int64                    `json:"user_id"`
+	GroupID       *int64                   `json:"group_id,omitempty"`
+	RouteGroupIDs []int64                  `json:"route_group_ids,omitempty"`
+	Name          string                   `json:"name"`
+	Status        string                   `json:"status"`
+	IPWhitelist   []string                 `json:"ip_whitelist,omitempty"`
+	IPBlacklist   []string                 `json:"ip_blacklist,omitempty"`
+	User          APIKeyAuthUserSnapshot   `json:"user"`
+	Group         *APIKeyAuthGroupSnapshot `json:"group,omitempty"`
+
+	// Quota fields for API Key independent quota feature
+	Quota     float64 `json:"quota"`      // Quota limit in USD (0 = unlimited)
+	QuotaUsed float64 `json:"quota_used"` // Used quota amount
+
+	// Expiration field for API Key expiration feature
+	ExpiresAt *time.Time `json:"expires_at,omitempty"` // Expiration time (nil = never expires)
+
+	// Rate limit configuration (only limits, not usage - usage read from Redis at check time)
+	RateLimit5h float64 `json:"rate_limit_5h"`
+	RateLimit1d float64 `json:"rate_limit_1d"`
+	RateLimit7d float64 `json:"rate_limit_7d"`
+	// AnthropicCacheTTLMode 密钥级 Anthropic cache_control TTL 覆盖：
+	// inherit|off|1h|5m。必须随认证快照缓存，网关热路径不再回查数据库。
+	AnthropicCacheTTLMode     string   `json:"anthropic_cache_ttl_mode"`
+	AdaptiveRoutingPreference string   `json:"adaptive_routing_preference,omitempty"`
+	AdaptiveMaxRateMultiplier *float64 `json:"adaptive_max_rate_multiplier,omitempty"`
+	AdaptiveLeafGroupIDs      []int64  `json:"adaptive_leaf_group_ids,omitempty"`
+}
+
+// APIKeyAuthUserSnapshot 用户快照
+type APIKeyAuthUserSnapshot struct {
+	ID            int64   `json:"id"`
+	Status        string  `json:"status"`
+	Role          string  `json:"role"`
+	Balance       float64 `json:"balance"`
+	Concurrency   int     `json:"concurrency"`
+	AllowedGroups []int64 `json:"allowed_groups,omitempty"`
+
+	// Balance notification fields (required for CheckBalanceAfterDeduction)
+	Email                             string             `json:"email"`
+	Username                          string             `json:"username"`
+	BalanceNotifyEnabled              bool               `json:"balance_notify_enabled"`
+	RestrictPublicGroups              bool               `json:"restrict_public_groups"`
+	BalanceNotifyThresholdType        string             `json:"balance_notify_threshold_type"`
+	BalanceNotifyThreshold            *float64           `json:"balance_notify_threshold,omitempty"`
+	BalanceNotifyExtraEmails          []NotifyEmailEntry `json:"balance_notify_extra_emails,omitempty"`
+	BalanceNotifyPrimaryEmailDisabled bool               `json:"balance_notify_primary_email_disabled"`
+	TotalRecharged                    float64            `json:"total_recharged"`
+
+	// RPMLimit 用户级每分钟请求数上限（0 = 不限制）；用于 billing_cache_service.checkRPM 兜底判断。
+	RPMLimit int `json:"rpm_limit"`
+
+	// UserGroupRPMOverride 该 API Key 对应的 (user, group) 专属 RPM 覆盖值。
+	// nil = 无 override；0 = 不限流；>0 = 专属上限。
+	UserGroupRPMOverride *int `json:"user_group_rpm_override,omitempty"`
+	// UserGroupRPMOverrideLoaded distinguishes a confirmed nil override from a
+	// failed lookup. Without this bit, every cached key with no override would
+	// trigger a PostgreSQL lookup on every /v1 request.
+	UserGroupRPMOverrideLoaded bool `json:"user_group_rpm_override_loaded"`
+}
+
+// APIKeyAuthGroupSnapshot 分组快照
+type APIKeyAuthGroupSnapshot struct {
+	ID                              int64                         `json:"id"`
+	Name                            string                        `json:"name"`
+	Platform                        string                        `json:"platform"`
+	IsExclusive                     bool                          `json:"is_exclusive"`
+	Status                          string                        `json:"status"`
+	SubscriptionType                string                        `json:"subscription_type"`
+	RateMultiplier                  float64                       `json:"rate_multiplier"`
+	DailyLimitUSD                   *float64                      `json:"daily_limit_usd,omitempty"`
+	WeeklyLimitUSD                  *float64                      `json:"weekly_limit_usd,omitempty"`
+	MonthlyLimitUSD                 *float64                      `json:"monthly_limit_usd,omitempty"`
+	AllowImageGeneration            bool                          `json:"allow_image_generation"`
+	AllowBatchImageGeneration       bool                          `json:"allow_batch_image_generation"`
+	ImageRateIndependent            bool                          `json:"image_rate_independent"`
+	ImageRateMultiplier             float64                       `json:"image_rate_multiplier"`
+	ImagePrice1K                    *float64                      `json:"image_price_1k,omitempty"`
+	ImagePrice2K                    *float64                      `json:"image_price_2k,omitempty"`
+	ImagePrice4K                    *float64                      `json:"image_price_4k,omitempty"`
+	VideoRateIndependent            bool                          `json:"video_rate_independent"`
+	VideoRateMultiplier             float64                       `json:"video_rate_multiplier"`
+	VideoPrice480P                  *float64                      `json:"video_price_480p,omitempty"`
+	VideoPrice720P                  *float64                      `json:"video_price_720p,omitempty"`
+	VideoPrice1080P                 *float64                      `json:"video_price_1080p,omitempty"`
+	VideoModelPrices                map[string]map[string]float64 `json:"video_model_prices,omitempty"`
+	WebSearchPricePerCall           *float64                      `json:"web_search_price_per_call,omitempty"`
+	SearchPricePer1k                *float64                      `json:"search_price_per_1k,omitempty"`
+	AudioRealtimePricePerMin        *float64                      `json:"audio_realtime_price_per_min,omitempty"`
+	AudioTTSPricePerMillionChars    *float64                      `json:"audio_tts_price_per_million_chars,omitempty"`
+	AudioSTTPricePerHour            *float64                      `json:"audio_stt_price_per_hour,omitempty"`
+	LongContextPricingEnabled       bool                          `json:"long_context_pricing_enabled"`
+	ModelPricing                    []ChannelModelPricing         `json:"model_pricing,omitempty"`
+	ClaudeCodeOnly                  bool                          `json:"claude_code_only"`
+	FallbackGroupID                 *int64                        `json:"fallback_group_id,omitempty"`
+	FallbackGroupIDOnInvalidRequest *int64                        `json:"fallback_group_id_on_invalid_request,omitempty"`
+
+	// Model routing is used by gateway account selection, so it must be part of auth cache snapshot.
+	// Only anthropic groups use these fields; others may leave them empty.
+	ModelRouting        map[string][]int64 `json:"model_routing,omitempty"`
+	ModelRoutingEnabled bool               `json:"model_routing_enabled"`
+	MCPXMLInject        bool               `json:"mcp_xml_inject"`
+
+	// 支持的模型系列（仅 antigravity 平台使用）
+	SupportedModelScopes []string `json:"supported_model_scopes,omitempty"`
+
+	// OpenAI Messages 调度配置（仅 openai 平台使用）
+	AllowMessagesDispatch bool `json:"allow_messages_dispatch"`
+	// CrossProtocolConversionEnabled 分组级跨协议转换开关。网关热路径按认证快照判定，
+	// 必须随快照缓存。用指针而不是 bool：Redis 里的快照由新旧两版进程共享，旧版写的
+	// 快照没有这个字段——必须能和"显式 false"区分开，见 snapshotCrossProtocolEnabled。
+	// 不靠升 apiKeyAuthSnapshotVersion 来区分：缓存键不含版本，升版会让新旧进程在
+	// 灰度期互相把对方的条目判失效，每次 L1 未命中都打到数据库认证查询上。
+	CrossProtocolConversionEnabled *bool                             `json:"cross_protocol_conversion_enabled,omitempty"`
+	AllowLive                      bool                              `json:"allow_live"`
+	ForceOpenAIFast                bool                              `json:"force_openai_fast"`
+	FreeOpenAIFast                 bool                              `json:"free_openai_fast"`
+	DefaultMappedModel             string                            `json:"default_mapped_model,omitempty"`
+	MessagesDispatchModelConfig    OpenAIMessagesDispatchModelConfig `json:"messages_dispatch_model_config,omitempty"`
+	ModelsListConfig               GroupModelsListConfig             `json:"models_list_config,omitempty"`
+	ModelAllowlist                 GroupModelAllowlist               `json:"model_allowlist,omitempty"`
+	// CodexModelsManifestConfig 与 ModelAllowlist 一样在认证快照分组里透传，
+	// Codex /models handler 直接读认证分组对象。
+	CodexModelsManifestConfig GroupCodexModelsManifestConfig `json:"codex_models_manifest_config,omitempty"`
+
+	// RPMLimit 分组级每分钟请求数上限（0 = 不限制）；用于 billing_cache_service.checkRPM 级联判断。
+	RPMLimit int `json:"rpm_limit"`
+
+	// MaxReasoningEffort Anthropic/OpenAI 请求的推理强度上限，空字符串表示不限制。
+	MaxReasoningEffort string `json:"max_reasoning_effort,omitempty"`
+	// MaxReasoningEffortOverLimit 超过上限时的访问控制：downgrade（默认）或 deny。
+	MaxReasoningEffortOverLimit string `json:"max_reasoning_effort_over_limit,omitempty"`
+	// ReasoningEffortMappings rewrites explicit effort values before the ceiling.
+	ReasoningEffortMappings []ReasoningEffortMapping `json:"reasoning_effort_mappings"`
+
+	// 高峰时段倍率：PeakRateEnabled 为 true 且请求时刻处于 [PeakStart, PeakEnd) 时，
+	// token 计费倍率额外乘以 PeakRateMultiplier（详见 Group.PeakMultiplierAt）。
+	// 必须随快照缓存，否则扣费路径拿到的 apiKey.Group 缺字段、高峰倍率失效。
+	PeakRateEnabled    bool    `json:"peak_rate_enabled"`
+	PeakStart          string  `json:"peak_start"`
+	PeakEnd            string  `json:"peak_end"`
+	PeakRateMultiplier float64 `json:"peak_rate_multiplier"`
+
+	// 分组利润控制：调度准入门在直连热路径上读的就是这份快照——门解析
+	// （resolveOpenAIProfitControlGate / resolveProfitControlGroup）优先取
+	// 认证中间件放入 ctx 的 Group，而它正是本快照物化出来的对象，生产绝大
+	// 多数流量走的都是这条路；只有 composite/模型路由等被调度分组与认证分组
+	// 不一致时才回源 schedulerSnapshot。
+	// 因此这三个字段与 GetByKeyForAuth 的投影都不得删减：漏掉任何一个，
+	// 门会拿到零值 ProfitControlEnabled=false 而静默失效（有集成测试兜底）。
+	ProfitControlEnabled bool    `json:"profit_control_enabled"`
+	ProfitMinMargin      float64 `json:"profit_min_margin"`
+	ProfitSafetyBuffer   float64 `json:"profit_safety_buffer"`
+}
+
+// APIKeyAuthCacheEntry 缓存条目，支持负缓存
+type APIKeyAuthCacheEntry struct {
+	NotFound bool                `json:"not_found"`
+	Snapshot *APIKeyAuthSnapshot `json:"snapshot,omitempty"`
+}

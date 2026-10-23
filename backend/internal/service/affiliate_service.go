@@ -1,0 +1,978 @@
+package service
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"math"
+	"sort"
+	"strings"
+	"time"
+
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
+)
+
+var (
+	ErrAffiliateProfileNotFound = infraerrors.NotFound("AFFILIATE_PROFILE_NOT_FOUND", "affiliate profile not found")
+	ErrAffiliateCodeInvalid     = infraerrors.BadRequest("AFFILIATE_CODE_INVALID", "invalid affiliate code")
+	ErrAffiliateCodeTaken       = infraerrors.Conflict("AFFILIATE_CODE_TAKEN", "affiliate code already in use")
+	ErrAffiliateCodeLimit       = infraerrors.BadRequest("AFFILIATE_CODE_LIMIT_REACHED", "custom affiliate code limit reached")
+	ErrAffiliateAlreadyBound    = infraerrors.Conflict("AFFILIATE_ALREADY_BOUND", "affiliate inviter already bound")
+	ErrAffiliateQuotaEmpty      = infraerrors.BadRequest("AFFILIATE_QUOTA_EMPTY", "no affiliate quota available to transfer")
+
+	ErrAffiliateQuotaInsufficient     = infraerrors.BadRequest("AFFILIATE_QUOTA_INSUFFICIENT", "insufficient available affiliate quota")
+	ErrAffiliateWithdrawAmountInvalid = infraerrors.BadRequest("AFFILIATE_WITHDRAW_AMOUNT_INVALID", "invalid offline withdrawal amount")
+)
+
+const (
+	affiliateInviteesLimit = 100
+	// AffiliateCodeMinLength / AffiliateCodeMaxLength bound both system-generated
+	// 12-char codes and admin-customized codes (e.g. "VIP2026").
+	AffiliateCodeMinLength = 4
+	AffiliateCodeMaxLength = 32
+	// MaxUserAffiliateCodes limits the extra custom codes a user may hold.
+	// The default code in user_affiliates.aff_code does not count towards it,
+	// so a user ends up with at most MaxUserAffiliateCodes+1 usable codes.
+	MaxUserAffiliateCodes = 9
+)
+
+// UserAffiliateCode is one extra invitation code owned by a user. The default
+// code lives in user_affiliates.aff_code and is not represented here.
+type UserAffiliateCode struct {
+	ID             int64     `json:"id"`
+	UserID         int64     `json:"user_id"`
+	Code           string    `json:"code"`
+	IsCustom       bool      `json:"is_custom"`
+	CreatedByAdmin bool      `json:"created_by_admin"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+	InviteCount    int       `json:"invite_count"`
+	RebateAmount   float64   `json:"rebate_amount"`
+	Retired        bool      `json:"retired,omitempty"`
+}
+
+// AffiliateCodeStat is the invite count and accrued rebate of one code.
+type AffiliateCodeStat struct {
+	InviteCount  int
+	RebateAmount float64
+}
+
+// UserAffiliateCodeQuota reports how many extra codes a user may still create.
+type UserAffiliateCodeQuota struct {
+	Max   int `json:"max"`
+	Used  int `json:"used"`
+	Limit int `json:"limit"`
+}
+
+// affiliateCodeValidChar accepts uppercase letters, digits, underscore and dash.
+// All input passes through strings.ToUpper before validation, so lowercase from
+// users is normalized — admins may supply mixed case in their UI.
+var affiliateCodeValidChar = func() [256]bool {
+	var tbl [256]bool
+	for c := byte('A'); c <= 'Z'; c++ {
+		tbl[c] = true
+	}
+	for c := byte('0'); c <= '9'; c++ {
+		tbl[c] = true
+	}
+	tbl['_'] = true
+	tbl['-'] = true
+	return tbl
+}()
+
+// isValidAffiliateCodeFormat validates code format for both binding (user input)
+// and admin updates. Caller is expected to upper-case the input first.
+func isValidAffiliateCodeFormat(code string) bool {
+	if len(code) < AffiliateCodeMinLength || len(code) > AffiliateCodeMaxLength {
+		return false
+	}
+	for i := 0; i < len(code); i++ {
+		if !affiliateCodeValidChar[code[i]] {
+			return false
+		}
+	}
+	return true
+}
+
+type AffiliateSummary struct {
+	UserID               int64     `json:"user_id"`
+	AffCode              string    `json:"aff_code"`
+	AffCodeCustom        bool      `json:"aff_code_custom"`
+	AffRebateRatePercent *float64  `json:"aff_rebate_rate_percent,omitempty"`
+	InviterID            *int64    `json:"inviter_id,omitempty"`
+	AffCount             int       `json:"aff_count"`
+	AffQuota             float64   `json:"aff_quota"`
+	AffFrozenQuota       float64   `json:"aff_frozen_quota"`
+	AffHistoryQuota      float64   `json:"aff_history_quota"`
+	CreatedAt            time.Time `json:"created_at"`
+	UpdatedAt            time.Time `json:"updated_at"`
+}
+
+type AffiliateInvitee struct {
+	UserID      int64      `json:"user_id"`
+	Email       string     `json:"email"`
+	Username    string     `json:"username"`
+	CreatedAt   *time.Time `json:"created_at,omitempty"`
+	TotalRebate float64    `json:"total_rebate"`
+}
+
+type AffiliateDetail struct {
+	UserID          int64   `json:"user_id"`
+	AffCode         string  `json:"aff_code"`
+	InviterID       *int64  `json:"inviter_id,omitempty"`
+	AffCount        int     `json:"aff_count"`
+	AffQuota        float64 `json:"aff_quota"`
+	AffFrozenQuota  float64 `json:"aff_frozen_quota"`
+	AffHistoryQuota float64 `json:"aff_history_quota"`
+	// EffectiveRebateRatePercent 是当前用户作为邀请人时实际生效的返利比例：
+	// 优先用户自己的专属比例（aff_rebate_rate_percent），否则回退到全局比例。
+	// 用于在用户的 /affiliate 页面直观展示「分享后能拿到多少」。
+	EffectiveRebateRatePercent float64            `json:"effective_rebate_rate_percent"`
+	Invitees                   []AffiliateInvitee `json:"invitees"`
+	AffCodeInviteCount         int                `json:"aff_code_invite_count"`
+	AffCodeRebateAmount        float64            `json:"aff_code_rebate_amount"`
+	// CustomCodes 是默认码之外、用户自建或管理员代建的邀请码。
+	CustomCodes     []UserAffiliateCode    `json:"custom_codes"`
+	CustomCodeQuota UserAffiliateCodeQuota `json:"custom_code_quota"`
+}
+
+type AffiliateRepository interface {
+	EnsureUserAffiliate(ctx context.Context, userID int64) (*AffiliateSummary, error)
+	GetAffiliateByCode(ctx context.Context, code string) (*AffiliateSummary, error)
+	BindInviter(ctx context.Context, userID, inviterID int64, code string) (bool, error)
+	AccrueQuota(ctx context.Context, inviterID, inviteeUserID int64, amount float64, freezeHours int, sourceOrderID *int64) (bool, error)
+	GetAccruedRebateFromInvitee(ctx context.Context, inviterID, inviteeUserID int64) (float64, error)
+	ThawFrozenQuota(ctx context.Context, userID int64) (float64, error)
+	TransferQuotaToBalance(ctx context.Context, userID int64) (float64, float64, error)
+	WithdrawQuota(ctx context.Context, userID int64, amount float64, operationID string) (*AffiliateWithdrawResult, error)
+	ListInvitees(ctx context.Context, inviterID int64, limit int) ([]AffiliateInvitee, error)
+
+	// 管理端：用户级专属配置
+	UpdateUserAffCode(ctx context.Context, userID int64, newCode string) error
+	ResetUserAffCode(ctx context.Context, userID int64) (string, error)
+	// 用户自定义邀请码（默认码之外的额外码）
+	ListUserAffiliateCodes(ctx context.Context, userID int64) ([]UserAffiliateCode, error)
+	ListAffiliateCodeStats(ctx context.Context, userID int64) (map[string]AffiliateCodeStat, error)
+	CountUserAffiliateCodes(ctx context.Context, userID int64) (int, error)
+	CreateUserAffiliateCode(ctx context.Context, userID int64, code string, isCustom, byAdmin bool) (*UserAffiliateCode, error)
+	DeleteUserAffiliateCode(ctx context.Context, userID, codeID int64) (bool, error)
+	DeleteUserAffiliateCodeByCode(ctx context.Context, userID int64, code string) (bool, error)
+	SetUserRebateRate(ctx context.Context, userID int64, ratePercent *float64) error
+	BatchSetUserRebateRate(ctx context.Context, userIDs []int64, ratePercent *float64) error
+	ListUsersWithCustomSettings(ctx context.Context, filter AffiliateAdminFilter) ([]AffiliateAdminEntry, int64, error)
+	ListAffiliateInviteRecords(ctx context.Context, filter AffiliateRecordFilter) ([]AffiliateInviteRecord, int64, error)
+	ListAffiliateRebateRecords(ctx context.Context, filter AffiliateRecordFilter) ([]AffiliateRebateRecord, int64, error)
+	ListAffiliateTransferRecords(ctx context.Context, filter AffiliateRecordFilter) ([]AffiliateTransferRecord, int64, error)
+	GetAffiliateUserOverview(ctx context.Context, userID int64) (*AffiliateUserOverview, error)
+}
+
+// AffiliateAdminFilter 列表筛选条件
+type AffiliateAdminFilter struct {
+	Search   string
+	Page     int
+	PageSize int
+}
+
+// AffiliateAdminEntry 专属用户列表条目
+type AffiliateAdminEntry struct {
+	UserID               int64    `json:"user_id"`
+	Email                string   `json:"email"`
+	Username             string   `json:"username"`
+	AffCode              string   `json:"aff_code"`
+	AffCodeCustom        bool     `json:"aff_code_custom"`
+	AffRebateRatePercent *float64 `json:"aff_rebate_rate_percent,omitempty"`
+	AffCount             int      `json:"aff_count"`
+}
+
+type AffiliateRecordFilter struct {
+	Search   string
+	Page     int
+	PageSize int
+	StartAt  *time.Time
+	EndAt    *time.Time
+	SortBy   string
+	SortDesc bool
+}
+
+type AffiliateInviteRecord struct {
+	InviterID       int64     `json:"inviter_id"`
+	InviterEmail    string    `json:"inviter_email"`
+	InviterUsername string    `json:"inviter_username"`
+	InviteeID       int64     `json:"invitee_id"`
+	InviteeEmail    string    `json:"invitee_email"`
+	InviteeUsername string    `json:"invitee_username"`
+	AffCode         string    `json:"aff_code"`
+	TotalRebate     float64   `json:"total_rebate"`
+	CreatedAt       time.Time `json:"created_at"`
+}
+
+type AffiliateRebateRecord struct {
+	OrderID         int64     `json:"order_id"`
+	OutTradeNo      string    `json:"out_trade_no"`
+	InviterID       int64     `json:"inviter_id"`
+	InviterEmail    string    `json:"inviter_email"`
+	InviterUsername string    `json:"inviter_username"`
+	InviteeID       int64     `json:"invitee_id"`
+	InviteeEmail    string    `json:"invitee_email"`
+	InviteeUsername string    `json:"invitee_username"`
+	OrderAmount     float64   `json:"order_amount"`
+	PayAmount       float64   `json:"pay_amount"`
+	RebateAmount    float64   `json:"rebate_amount"`
+	PaymentType     string    `json:"payment_type"`
+	OrderStatus     string    `json:"order_status"`
+	CreatedAt       time.Time `json:"created_at"`
+}
+
+// AffiliateTransferRecord 是一笔返利额度流出：Action 为 transfer（用户转入余额）
+// 或 withdraw（管理员登记的线下提现）。
+type AffiliateTransferRecord struct {
+	LedgerID            int64     `json:"ledger_id"`
+	Action              string    `json:"action"`
+	UserID              int64     `json:"user_id"`
+	UserEmail           string    `json:"user_email"`
+	Username            string    `json:"username"`
+	Amount              float64   `json:"amount"`
+	BalanceAfter        *float64  `json:"balance_after,omitempty"`
+	AvailableQuotaAfter *float64  `json:"available_quota_after,omitempty"`
+	FrozenQuotaAfter    *float64  `json:"frozen_quota_after,omitempty"`
+	HistoryQuotaAfter   *float64  `json:"history_quota_after,omitempty"`
+	SnapshotAvailable   bool      `json:"snapshot_available"`
+	CurrentBalance      float64   `json:"-"`
+	RemainingQuota      float64   `json:"-"`
+	FrozenQuota         float64   `json:"-"`
+	HistoryQuota        float64   `json:"-"`
+	CreatedAt           time.Time `json:"created_at"`
+}
+
+// AffiliateWithdrawResult 是线下提现登记完成后的流水 ID 与额度快照。
+// Replayed 表示本次请求命中了同一幂等标识的已有登记，返回的是首次登记的结果。
+type AffiliateWithdrawResult struct {
+	LedgerID            int64   `json:"ledger_id"`
+	UserID              int64   `json:"user_id"`
+	Amount              float64 `json:"amount"`
+	AvailableQuotaAfter float64 `json:"available_quota_after"`
+	FrozenQuotaAfter    float64 `json:"frozen_quota_after"`
+	HistoryQuotaAfter   float64 `json:"history_quota_after"`
+	Replayed            bool    `json:"-"`
+}
+
+type AffiliateUserOverview struct {
+	UserID              int64   `json:"user_id"`
+	Email               string  `json:"email"`
+	Username            string  `json:"username"`
+	AffCode             string  `json:"aff_code"`
+	RebateRatePercent   float64 `json:"rebate_rate_percent"`
+	RebateRateCustom    bool    `json:"-"`
+	InvitedCount        int     `json:"invited_count"`
+	RebatedInviteeCount int     `json:"rebated_invitee_count"`
+	AvailableQuota      float64 `json:"available_quota"`
+	HistoryQuota        float64 `json:"history_quota"`
+	AffCodeInviteCount  int     `json:"aff_code_invite_count"`
+	AffCodeRebateAmount float64 `json:"aff_code_rebate_amount"`
+	// CustomCodes 是默认码之外、用户自建或管理员代建的邀请码。
+	CustomCodes     []UserAffiliateCode    `json:"custom_codes"`
+	CustomCodeQuota UserAffiliateCodeQuota `json:"custom_code_quota"`
+}
+
+type AffiliateService struct {
+	repo                 AffiliateRepository
+	settingService       *SettingService
+	authCacheInvalidator APIKeyAuthCacheInvalidator
+	billingCacheService  *BillingCacheService
+}
+
+// affiliateUserSettingsAtomic is implemented by the SQL repository so the
+// admin's two optional settings are committed together. The fallback keeps
+// lightweight test repositories compatible while production uses one tx.
+type affiliateUserSettingsAtomic interface {
+	UpdateUserSettings(ctx context.Context, userID int64, affCode *string, ratePercent *float64, clearRate bool) error
+	ClearUserSettings(ctx context.Context, userID int64) error
+}
+
+type affiliateBatchRateCounter interface {
+	BatchSetUserRebateRateCount(ctx context.Context, userIDs []int64, ratePercent *float64) (int, error)
+}
+
+func NewAffiliateService(repo AffiliateRepository, settingService *SettingService, authCacheInvalidator APIKeyAuthCacheInvalidator, billingCacheService *BillingCacheService) *AffiliateService {
+	return &AffiliateService{
+		repo:                 repo,
+		settingService:       settingService,
+		authCacheInvalidator: authCacheInvalidator,
+		billingCacheService:  billingCacheService,
+	}
+}
+
+// IsEnabled reports whether the affiliate (邀请返利) feature is turned on.
+func (s *AffiliateService) IsEnabled(ctx context.Context) bool {
+	if s == nil || s.settingService == nil {
+		return AffiliateEnabledDefault
+	}
+	return s.settingService.IsAffiliateEnabled(ctx)
+}
+
+func (s *AffiliateService) EnsureUserAffiliate(ctx context.Context, userID int64) (*AffiliateSummary, error) {
+	if userID <= 0 {
+		return nil, infraerrors.BadRequest("INVALID_USER", "invalid user")
+	}
+	if s == nil || s.repo == nil {
+		return nil, infraerrors.ServiceUnavailable("SERVICE_UNAVAILABLE", "affiliate service unavailable")
+	}
+	return s.repo.EnsureUserAffiliate(ctx, userID)
+}
+
+func (s *AffiliateService) GetAffiliateDetail(ctx context.Context, userID int64) (*AffiliateDetail, error) {
+	// Lazy thaw: move any matured frozen quota to available before reading.
+	if s != nil && s.repo != nil {
+		// best-effort: thaw failure is non-fatal
+		_, _ = s.repo.ThawFrozenQuota(ctx, userID)
+	}
+
+	summary, err := s.EnsureUserAffiliate(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	invitees, err := s.listInvitees(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	customCodes, quota, err := s.ListUserAffiliateCodes(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	defCount, defRebate, customCodes := s.attachAffiliateCodeStats(ctx, userID, summary.AffCode, customCodes)
+	return &AffiliateDetail{
+		UserID:                     summary.UserID,
+		AffCode:                    summary.AffCode,
+		InviterID:                  summary.InviterID,
+		AffCount:                   summary.AffCount,
+		AffQuota:                   summary.AffQuota,
+		AffFrozenQuota:             summary.AffFrozenQuota,
+		AffHistoryQuota:            summary.AffHistoryQuota,
+		EffectiveRebateRatePercent: s.resolveRebateRatePercent(ctx, summary),
+		Invitees:                   invitees,
+		AffCodeInviteCount:         defCount,
+		AffCodeRebateAmount:        defRebate,
+		CustomCodes:                customCodes,
+		CustomCodeQuota:            quota,
+	}, nil
+}
+
+func (s *AffiliateService) BindInviterByCode(ctx context.Context, userID int64, rawCode string) error {
+	code := strings.ToUpper(strings.TrimSpace(rawCode))
+	if code == "" {
+		return nil
+	}
+	if s == nil || s.repo == nil {
+		return infraerrors.ServiceUnavailable("SERVICE_UNAVAILABLE", "affiliate service unavailable")
+	}
+	// 总开关关闭时，注册阶段静默忽略 aff 参数（不报错，避免阻断注册流程）
+	if !s.IsEnabled(ctx) {
+		return nil
+	}
+	if !isValidAffiliateCodeFormat(code) {
+		return ErrAffiliateCodeInvalid
+	}
+
+	selfSummary, err := s.repo.EnsureUserAffiliate(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if selfSummary.InviterID != nil {
+		return nil
+	}
+
+	inviterSummary, err := s.repo.GetAffiliateByCode(ctx, code)
+	if err != nil {
+		if errors.Is(err, ErrAffiliateProfileNotFound) {
+			return ErrAffiliateCodeInvalid
+		}
+		return err
+	}
+	if inviterSummary == nil || inviterSummary.UserID <= 0 || inviterSummary.UserID == userID {
+		return ErrAffiliateCodeInvalid
+	}
+
+	bound, err := s.repo.BindInviter(ctx, userID, inviterSummary.UserID, code)
+	if err != nil {
+		return err
+	}
+	// 同一个用户并发重复提交同一个码：库内 WHERE inviter_id IS NULL 只让一行成功。
+	// 失败的那次不再报冲突，也不再加邀请人数。
+	if !bound {
+		return nil
+	}
+	return nil
+}
+
+func (s *AffiliateService) AccrueInviteRebate(ctx context.Context, inviteeUserID int64, baseRechargeAmount float64) (float64, error) {
+	return s.AccrueInviteRebateForOrder(ctx, inviteeUserID, baseRechargeAmount, nil)
+}
+
+func (s *AffiliateService) AccrueInviteRebateForOrder(ctx context.Context, inviteeUserID int64, baseRechargeAmount float64, sourceOrderID *int64) (float64, error) {
+	if s == nil || s.repo == nil {
+		return 0, nil
+	}
+	if inviteeUserID <= 0 || baseRechargeAmount <= 0 || math.IsNaN(baseRechargeAmount) || math.IsInf(baseRechargeAmount, 0) {
+		return 0, nil
+	}
+	// 总开关关闭时，新充值不再产生返利
+	if !s.IsEnabled(ctx) {
+		return 0, nil
+	}
+
+	inviteeSummary, err := s.repo.EnsureUserAffiliate(ctx, inviteeUserID)
+	if err != nil {
+		return 0, err
+	}
+	if inviteeSummary.InviterID == nil || *inviteeSummary.InviterID <= 0 {
+		return 0, nil
+	}
+
+	// 加载邀请人 profile，优先使用专属比例（覆盖全局）
+	inviterSummary, err := s.repo.EnsureUserAffiliate(ctx, *inviteeSummary.InviterID)
+	if err != nil {
+		return 0, err
+	}
+	// 有效期检查：超过返利有效期后不再产生返利
+	if s.settingService != nil {
+		if durationDays := s.settingService.GetAffiliateRebateDurationDays(ctx); durationDays > 0 {
+			if time.Now().After(inviteeSummary.CreatedAt.AddDate(0, 0, durationDays)) {
+				return 0, nil
+			}
+		}
+	}
+
+	rebateRatePercent := s.resolveRebateRatePercent(ctx, inviterSummary)
+	rebate := roundTo(baseRechargeAmount*(rebateRatePercent/100), 8)
+	if rebate <= 0 {
+		return 0, nil
+	}
+
+	// 单人上限检查：精确截断到剩余额度
+	if s.settingService != nil {
+		if perInviteeCap := s.settingService.GetAffiliateRebatePerInviteeCap(ctx); perInviteeCap > 0 {
+			existing, err := s.repo.GetAccruedRebateFromInvitee(ctx, *inviteeSummary.InviterID, inviteeUserID)
+			if err != nil {
+				return 0, err
+			}
+			if existing >= perInviteeCap {
+				return 0, nil
+			}
+			if remaining := perInviteeCap - existing; rebate > remaining {
+				rebate = roundTo(remaining, 8)
+			}
+		}
+	}
+
+	var freezeHours int
+	if s.settingService != nil {
+		freezeHours = s.settingService.GetAffiliateRebateFreezeHours(ctx)
+	}
+
+	applied, err := s.repo.AccrueQuota(ctx, *inviteeSummary.InviterID, inviteeUserID, rebate, freezeHours, sourceOrderID)
+	if err != nil {
+		return 0, err
+	}
+	if !applied {
+		return 0, nil
+	}
+	return rebate, nil
+}
+
+// resolveRebateRatePercent returns the inviter's exclusive rate when set,
+// otherwise the global setting value (clamped to [Min, Max]).
+func (s *AffiliateService) resolveRebateRatePercent(ctx context.Context, inviter *AffiliateSummary) float64 {
+	if inviter != nil && inviter.AffRebateRatePercent != nil {
+		v := *inviter.AffRebateRatePercent
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			return s.globalRebateRatePercent(ctx)
+		}
+		return clampAffiliateRebateRate(v)
+	}
+	return s.globalRebateRatePercent(ctx)
+}
+
+// globalRebateRatePercent reads the system-wide rebate rate via SettingService,
+// returning the documented default when SettingService is unavailable.
+func (s *AffiliateService) globalRebateRatePercent(ctx context.Context) float64 {
+	if s == nil || s.settingService == nil {
+		return AffiliateRebateRateDefault
+	}
+	return s.settingService.GetAffiliateRebateRatePercent(ctx)
+}
+
+func (s *AffiliateService) TransferAffiliateQuota(ctx context.Context, userID int64) (float64, float64, error) {
+	if s == nil || s.repo == nil {
+		return 0, 0, infraerrors.ServiceUnavailable("SERVICE_UNAVAILABLE", "affiliate service unavailable")
+	}
+
+	transferred, balance, err := s.repo.TransferQuotaToBalance(ctx, userID)
+	if err != nil {
+		return 0, 0, err
+	}
+	if transferred > 0 {
+		syncCommittedLiveBalanceAdjustment(
+			s.billingCacheService,
+			userID,
+			newLiveBalanceAdjustmentEventID("affiliate-transfer"),
+			transferred,
+		)
+		s.invalidateAffiliateCaches(ctx, userID)
+	}
+	return transferred, balance, nil
+}
+
+func (s *AffiliateService) listInvitees(ctx context.Context, inviterID int64) ([]AffiliateInvitee, error) {
+	if s == nil || s.repo == nil {
+		return nil, infraerrors.ServiceUnavailable("SERVICE_UNAVAILABLE", "affiliate service unavailable")
+	}
+	invitees, err := s.repo.ListInvitees(ctx, inviterID, affiliateInviteesLimit)
+	if err != nil {
+		return nil, err
+	}
+	for i := range invitees {
+		invitees[i].Email = maskEmail(invitees[i].Email)
+	}
+	return invitees, nil
+}
+
+func roundTo(v float64, scale int) float64 {
+	factor := math.Pow10(scale)
+	return math.Round(v*factor) / factor
+}
+
+func maskEmail(email string) string {
+	email = strings.TrimSpace(email)
+	if email == "" {
+		return ""
+	}
+	at := strings.Index(email, "@")
+	if at <= 0 || at >= len(email)-1 {
+		return "***"
+	}
+
+	local := email[:at]
+	domain := email[at+1:]
+	dot := strings.LastIndex(domain, ".")
+
+	maskedLocal := maskSegment(local)
+	if dot <= 0 || dot >= len(domain)-1 {
+		return maskedLocal + "@" + maskSegment(domain)
+	}
+
+	domainName := domain[:dot]
+	tld := domain[dot:]
+	return maskedLocal + "@" + maskSegment(domainName) + tld
+}
+
+func maskSegment(s string) string {
+	r := []rune(s)
+	if len(r) == 0 {
+		return "***"
+	}
+	if len(r) == 1 {
+		return string(r[0]) + "***"
+	}
+	return string(r[0]) + "***"
+}
+
+func (s *AffiliateService) invalidateAffiliateCaches(ctx context.Context, userID int64) {
+	if s.authCacheInvalidator != nil {
+		s.authCacheInvalidator.InvalidateAuthCacheByUserID(ctx, userID)
+	}
+}
+
+// =========================
+// Admin: 专属配置管理
+// =========================
+
+// validateExclusiveRate ensures a per-user override is finite and within
+// [Min, Max]. nil is always valid (means "clear / fall back to global").
+func validateExclusiveRate(ratePercent *float64) error {
+	if ratePercent == nil {
+		return nil
+	}
+	v := *ratePercent
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return infraerrors.BadRequest("INVALID_RATE", "invalid rebate rate")
+	}
+	if v < AffiliateRebateRateMin || v > AffiliateRebateRateMax {
+		return infraerrors.BadRequest("INVALID_RATE", "rebate rate out of range")
+	}
+	return nil
+}
+
+// AdminUpdateUserAffCode 管理员改写用户的邀请码（专属邀请码）。
+func (s *AffiliateService) AdminUpdateUserAffCode(ctx context.Context, userID int64, rawCode string) error {
+	if s == nil || s.repo == nil {
+		return infraerrors.ServiceUnavailable("SERVICE_UNAVAILABLE", "affiliate service unavailable")
+	}
+	code := strings.ToUpper(strings.TrimSpace(rawCode))
+	if !isValidAffiliateCodeFormat(code) {
+		return ErrAffiliateCodeInvalid
+	}
+	return s.repo.UpdateUserAffCode(ctx, userID, code)
+}
+
+// AdminUpdateUserSettings validates both fields before entering the repository
+// transaction, preventing a valid code from being committed when the rate is
+// rejected (and vice versa).
+func (s *AffiliateService) AdminUpdateUserSettings(ctx context.Context, userID int64, rawCode *string, ratePercent *float64, clearRate bool) error {
+	if s == nil || s.repo == nil {
+		return infraerrors.ServiceUnavailable("SERVICE_UNAVAILABLE", "affiliate service unavailable")
+	}
+	var code *string
+	if rawCode != nil {
+		v := strings.ToUpper(strings.TrimSpace(*rawCode))
+		if !isValidAffiliateCodeFormat(v) {
+			return ErrAffiliateCodeInvalid
+		}
+		code = &v
+	}
+	if clearRate {
+		ratePercent = nil
+	} else if err := validateExclusiveRate(ratePercent); err != nil {
+		return err
+	}
+	if code == nil && !clearRate && ratePercent == nil {
+		return nil
+	}
+	if atomicRepo, ok := s.repo.(affiliateUserSettingsAtomic); ok {
+		return atomicRepo.UpdateUserSettings(ctx, userID, code, ratePercent, clearRate)
+	}
+	if code != nil {
+		if err := s.repo.UpdateUserAffCode(ctx, userID, *code); err != nil {
+			return err
+		}
+	}
+	if clearRate || ratePercent != nil {
+		return s.repo.SetUserRebateRate(ctx, userID, ratePercent)
+	}
+	return nil
+}
+
+// AdminResetUserAffCode 重置用户邀请码为系统随机码。
+func (s *AffiliateService) AdminResetUserAffCode(ctx context.Context, userID int64) (string, error) {
+	if s == nil || s.repo == nil {
+		return "", infraerrors.ServiceUnavailable("SERVICE_UNAVAILABLE", "affiliate service unavailable")
+	}
+	return s.repo.ResetUserAffCode(ctx, userID)
+}
+
+// AdminClearUserSettings clears the rate and regenerates the code atomically.
+func (s *AffiliateService) AdminClearUserSettings(ctx context.Context, userID int64) error {
+	if s == nil || s.repo == nil {
+		return infraerrors.ServiceUnavailable("SERVICE_UNAVAILABLE", "affiliate service unavailable")
+	}
+	if atomicRepo, ok := s.repo.(affiliateUserSettingsAtomic); ok {
+		return atomicRepo.ClearUserSettings(ctx, userID)
+	}
+	if err := s.repo.SetUserRebateRate(ctx, userID, nil); err != nil {
+		return err
+	}
+	_, err := s.repo.ResetUserAffCode(ctx, userID)
+	return err
+}
+
+// AdminSetUserRebateRate 设置/清除用户专属返利比例。ratePercent==nil 表示清除。
+func (s *AffiliateService) AdminSetUserRebateRate(ctx context.Context, userID int64, ratePercent *float64) error {
+	if s == nil || s.repo == nil {
+		return infraerrors.ServiceUnavailable("SERVICE_UNAVAILABLE", "affiliate service unavailable")
+	}
+	if err := validateExclusiveRate(ratePercent); err != nil {
+		return err
+	}
+	return s.repo.SetUserRebateRate(ctx, userID, ratePercent)
+}
+
+// AdminBatchSetUserRebateRate 批量设置/清除用户专属返利比例。
+func (s *AffiliateService) AdminBatchSetUserRebateRate(ctx context.Context, userIDs []int64, ratePercent *float64) error {
+	_, err := s.AdminBatchSetUserRebateRateCount(ctx, userIDs, ratePercent)
+	return err
+}
+
+// AdminBatchSetUserRebateRateCount returns rows actually updated, after
+// dropping invalid IDs and de-duplicating the request.
+func (s *AffiliateService) AdminBatchSetUserRebateRateCount(ctx context.Context, userIDs []int64, ratePercent *float64) (int, error) {
+	if s == nil || s.repo == nil {
+		return 0, infraerrors.ServiceUnavailable("SERVICE_UNAVAILABLE", "affiliate service unavailable")
+	}
+	if err := validateExclusiveRate(ratePercent); err != nil {
+		return 0, err
+	}
+	cleaned := make([]int64, 0, len(userIDs))
+	seen := make(map[int64]struct{}, len(userIDs))
+	for _, uid := range userIDs {
+		if uid > 0 {
+			if _, ok := seen[uid]; ok {
+				continue
+			}
+			seen[uid] = struct{}{}
+			cleaned = append(cleaned, uid)
+		}
+	}
+	if len(cleaned) == 0 {
+		return 0, nil
+	}
+	if counter, ok := s.repo.(affiliateBatchRateCounter); ok {
+		return counter.BatchSetUserRebateRateCount(ctx, cleaned, ratePercent)
+	}
+	if err := s.repo.BatchSetUserRebateRate(ctx, cleaned, ratePercent); err != nil {
+		return 0, err
+	}
+	return len(cleaned), nil
+}
+
+// AdminListCustomUsers 列出有专属配置的用户。
+func (s *AffiliateService) AdminListCustomUsers(ctx context.Context, filter AffiliateAdminFilter) ([]AffiliateAdminEntry, int64, error) {
+	if s == nil || s.repo == nil {
+		return nil, 0, infraerrors.ServiceUnavailable("SERVICE_UNAVAILABLE", "affiliate service unavailable")
+	}
+	return s.repo.ListUsersWithCustomSettings(ctx, filter)
+}
+
+func (s *AffiliateService) AdminListInviteRecords(ctx context.Context, filter AffiliateRecordFilter) ([]AffiliateInviteRecord, int64, error) {
+	if s == nil || s.repo == nil {
+		return nil, 0, infraerrors.ServiceUnavailable("SERVICE_UNAVAILABLE", "affiliate service unavailable")
+	}
+	return s.repo.ListAffiliateInviteRecords(ctx, normalizeAffiliateRecordFilter(filter))
+}
+
+func (s *AffiliateService) AdminListRebateRecords(ctx context.Context, filter AffiliateRecordFilter) ([]AffiliateRebateRecord, int64, error) {
+	if s == nil || s.repo == nil {
+		return nil, 0, infraerrors.ServiceUnavailable("SERVICE_UNAVAILABLE", "affiliate service unavailable")
+	}
+	return s.repo.ListAffiliateRebateRecords(ctx, normalizeAffiliateRecordFilter(filter))
+}
+
+func (s *AffiliateService) AdminListTransferRecords(ctx context.Context, filter AffiliateRecordFilter) ([]AffiliateTransferRecord, int64, error) {
+	if s == nil || s.repo == nil {
+		return nil, 0, infraerrors.ServiceUnavailable("SERVICE_UNAVAILABLE", "affiliate service unavailable")
+	}
+	return s.repo.ListAffiliateTransferRecords(ctx, normalizeAffiliateRecordFilter(filter))
+}
+
+// AdminWithdrawQuota 登记一笔已在站外打款的线下提现：从用户可提取返利额度
+// 中扣除 amount，并写入 action=withdraw 的流水。冻结期内的额度不可扣除。
+// 金额按返利流水精度保留 8 位小数，舍入后必须为正。
+//
+// idempotencyKey 标识一次登记且必填：同一个键只扣减一次，重复请求在用户与金额
+// 一致时返回首次登记的结果，不一致时返回 ErrIdempotencyKeyConflict。
+func (s *AffiliateService) AdminWithdrawQuota(ctx context.Context, userID int64, amount float64, idempotencyKey string) (*AffiliateWithdrawResult, error) {
+	if userID <= 0 {
+		return nil, infraerrors.BadRequest("INVALID_USER", "invalid user")
+	}
+	if s == nil || s.repo == nil {
+		return nil, infraerrors.ServiceUnavailable("SERVICE_UNAVAILABLE", "affiliate service unavailable")
+	}
+	key, err := NormalizeIdempotencyKey(idempotencyKey)
+	if err != nil {
+		return nil, err
+	}
+	if key == "" {
+		return nil, ErrIdempotencyKeyRequired
+	}
+	if math.IsNaN(amount) || math.IsInf(amount, 0) {
+		return nil, ErrAffiliateWithdrawAmountInvalid
+	}
+	amount = roundTo(amount, 8)
+	if amount <= 0 || math.IsInf(amount, 0) {
+		return nil, ErrAffiliateWithdrawAmountInvalid
+	}
+	return s.repo.WithdrawQuota(ctx, userID, amount, affiliateWithdrawOperationID(key))
+}
+
+// affiliateWithdrawOperationID 把线下提现登记的幂等键映射为流水的 operation_id，
+// 同一个键始终得到同一个值。
+func affiliateWithdrawOperationID(idempotencyKey string) string {
+	sum := sha256.Sum256([]byte("admin.affiliates.withdraw\x00" + idempotencyKey))
+	return hex.EncodeToString(sum[:])
+}
+
+func (s *AffiliateService) AdminGetUserOverview(ctx context.Context, userID int64) (*AffiliateUserOverview, error) {
+	if userID <= 0 {
+		return nil, infraerrors.BadRequest("INVALID_USER", "invalid user")
+	}
+	if s == nil || s.repo == nil {
+		return nil, infraerrors.ServiceUnavailable("SERVICE_UNAVAILABLE", "affiliate service unavailable")
+	}
+	overview, err := s.repo.GetAffiliateUserOverview(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	if overview != nil {
+		if !overview.RebateRateCustom {
+			overview.RebateRatePercent = s.globalRebateRatePercent(ctx)
+		}
+		overview.RebateRatePercent = clampAffiliateRebateRate(overview.RebateRatePercent)
+		codes, quota, listErr := s.ListUserAffiliateCodes(ctx, userID)
+		if listErr == nil {
+			overview.CustomCodes = codes
+			overview.CustomCodeQuota = quota
+		} else {
+			codes = nil
+		}
+		defCount, defRebate, withStats := s.attachAffiliateCodeStats(ctx, userID, overview.AffCode, codes)
+		overview.AffCodeInviteCount = defCount
+		overview.AffCodeRebateAmount = defRebate
+		if listErr == nil {
+			overview.CustomCodes = withStats
+		}
+	}
+	return overview, nil
+}
+
+func normalizeAffiliateRecordFilter(filter AffiliateRecordFilter) AffiliateRecordFilter {
+	if filter.Page <= 0 {
+		filter.Page = 1
+	}
+	if filter.PageSize <= 0 {
+		filter.PageSize = 20
+	}
+	if filter.PageSize > 100 {
+		filter.PageSize = 100
+	}
+	filter.Search = strings.TrimSpace(filter.Search)
+	filter.SortBy = strings.TrimSpace(filter.SortBy)
+	return filter
+}
+
+// ---------------------------------------------------------------------------
+// 用户自定义邀请码
+//
+// 用户与管理员共用同一套校验：格式（4~32 位大写字母/数字/下划线/连字符）、
+// 唯一性（默认码表 ∪ 自定义码表）、数量上限（MaxUserAffiliateCodes）。
+// 差别只有 created_by_admin 标记与 HTTP 鉴权层。
+// ---------------------------------------------------------------------------
+
+func (s *AffiliateService) attachAffiliateCodeStats(ctx context.Context, userID int64, defaultCode string, codes []UserAffiliateCode) (int, float64, []UserAffiliateCode) {
+	if s == nil || s.repo == nil {
+		return 0, 0, codes
+	}
+	stats, err := s.repo.ListAffiliateCodeStats(ctx, userID)
+	if err != nil {
+		return 0, 0, codes
+	}
+	return applyAffiliateCodeStats(defaultCode, codes, stats)
+}
+
+// applyAffiliateCodeStats fills per-code invite counts. Codes that no longer
+// exist stay visible as retired rows so historical invites and rebates are not
+// dropped. Retired rows are not part of the create quota.
+func applyAffiliateCodeStats(defaultCode string, codes []UserAffiliateCode, stats map[string]AffiliateCodeStat) (int, float64, []UserAffiliateCode) {
+	if codes == nil {
+		codes = []UserAffiliateCode{}
+	}
+	if stats == nil {
+		stats = map[string]AffiliateCodeStat{}
+	}
+	defaultCode = strings.ToUpper(strings.TrimSpace(defaultCode))
+	known := map[string]struct{}{defaultCode: {}}
+	def := stats[defaultCode]
+	for i := range codes {
+		code := strings.ToUpper(strings.TrimSpace(codes[i].Code))
+		codes[i].Code = code
+		known[code] = struct{}{}
+		st := stats[code]
+		codes[i].InviteCount = st.InviteCount
+		codes[i].RebateAmount = st.RebateAmount
+	}
+	retired := make([]string, 0)
+	for code := range stats {
+		if code == "" {
+			continue
+		}
+		if _, ok := known[code]; ok {
+			continue
+		}
+		retired = append(retired, code)
+	}
+	sort.Strings(retired)
+	for _, code := range retired {
+		st := stats[code]
+		codes = append(codes, UserAffiliateCode{
+			Code:         code,
+			Retired:      true,
+			InviteCount:  st.InviteCount,
+			RebateAmount: st.RebateAmount,
+		})
+	}
+	return def.InviteCount, def.RebateAmount, codes
+}
+
+// ListUserAffiliateCodes 返回用户的额外邀请码与剩余额度。
+func (s *AffiliateService) ListUserAffiliateCodes(ctx context.Context, userID int64) ([]UserAffiliateCode, UserAffiliateCodeQuota, error) {
+	if s == nil || s.repo == nil {
+		return nil, UserAffiliateCodeQuota{}, infraerrors.ServiceUnavailable("SERVICE_UNAVAILABLE", "affiliate service unavailable")
+	}
+	items, err := s.repo.ListUserAffiliateCodes(ctx, userID)
+	if err != nil {
+		return nil, UserAffiliateCodeQuota{}, err
+	}
+	used, err := s.repo.CountUserAffiliateCodes(ctx, userID)
+	if err != nil {
+		return nil, UserAffiliateCodeQuota{}, err
+	}
+	return items, UserAffiliateCodeQuota{Max: MaxUserAffiliateCodes, Used: used, Limit: MaxUserAffiliateCodes - used}, nil
+}
+
+// CreateUserAffiliateCode 新建一个额外邀请码。byAdmin 决定 created_by_admin 标记。
+// 数量与格式在进库前校验，唯一性交给 repo（并集检查 + 唯一索引兜底）。
+func (s *AffiliateService) CreateUserAffiliateCode(ctx context.Context, userID int64, rawCode string, byAdmin bool) (*UserAffiliateCode, error) {
+	if s == nil || s.repo == nil {
+		return nil, infraerrors.ServiceUnavailable("SERVICE_UNAVAILABLE", "affiliate service unavailable")
+	}
+	if userID <= 0 {
+		return nil, infraerrors.BadRequest("INVALID_USER", "invalid user")
+	}
+	code := NormalizeAffiliateCode(rawCode)
+	if !isValidAffiliateCodeFormat(code) {
+		return nil, ErrAffiliateCodeInvalid
+	}
+	// 数量上限和跨表唯一都在 repo 的同一事务里加锁判断，这里不再先查一次。
+	return s.repo.CreateUserAffiliateCode(ctx, userID, code, true, byAdmin)
+}
+
+// DeleteUserAffiliateCode 删除用户自己的一个额外邀请码。
+func (s *AffiliateService) DeleteUserAffiliateCode(ctx context.Context, userID, codeID int64) error {
+	if s == nil || s.repo == nil {
+		return infraerrors.ServiceUnavailable("SERVICE_UNAVAILABLE", "affiliate service unavailable")
+	}
+	if codeID <= 0 {
+		return infraerrors.BadRequest("INVALID_CODE_ID", "invalid affiliate code id")
+	}
+	deleted, err := s.repo.DeleteUserAffiliateCode(ctx, userID, codeID)
+	if err != nil {
+		return err
+	}
+	if !deleted {
+		return infraerrors.NotFound("AFFILIATE_CODE_NOT_FOUND", "affiliate code not found")
+	}
+	return nil
+}
+
+// AdminDeleteUserAffiliateCode 管理端按 code 代删某个用户的额外邀请码。
+func (s *AffiliateService) AdminDeleteUserAffiliateCode(ctx context.Context, userID int64, rawCode string) error {
+	if s == nil || s.repo == nil {
+		return infraerrors.ServiceUnavailable("SERVICE_UNAVAILABLE", "affiliate service unavailable")
+	}
+	code := NormalizeAffiliateCode(rawCode)
+	if !isValidAffiliateCodeFormat(code) {
+		return ErrAffiliateCodeInvalid
+	}
+	deleted, err := s.repo.DeleteUserAffiliateCodeByCode(ctx, userID, code)
+	if err != nil {
+		return err
+	}
+	if !deleted {
+		return infraerrors.NotFound("AFFILIATE_CODE_NOT_FOUND", "affiliate code not found")
+	}
+	return nil
+}
+
+// NormalizeAffiliateCode 统一邀请码输入：去空格 + 转大写。
+// 所有入口（用户、管理员、注册绑定）都走这里，保证比较语义一致。
+func NormalizeAffiliateCode(raw string) string {
+	return strings.ToUpper(strings.TrimSpace(raw))
+}

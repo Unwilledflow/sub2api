@@ -1,0 +1,344 @@
+package handler
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"strconv"
+	"strings"
+
+	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
+	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
+	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/gin-gonic/gin"
+)
+
+type channelMonitorV2GroupAuthorizer interface {
+	GetAvailableGroups(context.Context, int64) ([]service.Group, error)
+}
+
+type ChannelMonitorV2Handler struct {
+	service       *service.ChannelMonitorV2Service
+	apiKeyService channelMonitorV2GroupAuthorizer
+}
+
+func NewChannelMonitorV2Handler(svc *service.ChannelMonitorV2Service, apiKeyService *service.APIKeyService) *ChannelMonitorV2Handler {
+	h := &ChannelMonitorV2Handler{service: svc}
+	if apiKeyService != nil {
+		h.apiKeyService = apiKeyService
+	}
+	return h
+}
+
+// channelMonitorV2IsAdmin is true when the request already passed admin auth
+// (shared Dimensions/Errors handlers serve both user and admin route groups).
+func channelMonitorV2IsAdmin(c *gin.Context) bool {
+	role, ok := middleware.GetUserRoleFromContext(c)
+	return ok && role == service.RoleAdmin
+}
+
+func (h *ChannelMonitorV2Handler) GetConfig(c *gin.Context) {
+	cfg, err := h.service.GetConfig(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, cfg)
+}
+
+func (h *ChannelMonitorV2Handler) UpdateConfig(c *gin.Context) {
+	var input service.ChannelMonitorV2Config
+	if err := c.ShouldBindJSON(&input); err != nil {
+		response.BadRequest(c, "invalid channel monitor v2 config")
+		return
+	}
+	subject, ok := middleware.GetAuthSubjectFromContext(c)
+	if !ok || subject.UserID <= 0 {
+		response.Unauthorized(c, "user not found in context")
+		return
+	}
+	updated, err := h.service.UpdateConfig(c.Request.Context(), input, input.Version, subject.UserID)
+	if err != nil {
+		if errors.Is(err, service.ErrChannelMonitorV2ConfigConflict) {
+			response.Error(c, http.StatusConflict, err.Error())
+			return
+		}
+		if errors.Is(err, service.ErrChannelMonitorV2InvalidConfig) {
+			response.BadRequest(c, err.Error())
+			return
+		}
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, updated)
+}
+
+func (h *ChannelMonitorV2Handler) Dimensions(c *gin.Context) {
+	filter, ok := h.parseFilter(c)
+	if !ok {
+		return
+	}
+	admin := channelMonitorV2IsAdmin(c)
+	if !h.scopeFilter(c, &filter, admin) {
+		return
+	}
+	result, err := h.service.Dimensions(c.Request.Context(), filter)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	// Admin and user share this handler; only non-admin responses strip volume.
+	if !admin {
+		service.RedactChannelMonitorV2Dimensions(result)
+	}
+	response.Success(c, result)
+}
+
+func (h *ChannelMonitorV2Handler) Snapshot(c *gin.Context)      { h.snapshot(c, false) }
+func (h *ChannelMonitorV2Handler) AdminSnapshot(c *gin.Context) { h.snapshot(c, true) }
+func (h *ChannelMonitorV2Handler) Models(c *gin.Context)        { h.models(c, false) }
+func (h *ChannelMonitorV2Handler) AdminModels(c *gin.Context)   { h.models(c, true) }
+func (h *ChannelMonitorV2Handler) Matrix(c *gin.Context)        { h.matrix(c, false) }
+func (h *ChannelMonitorV2Handler) AdminMatrix(c *gin.Context)   { h.matrix(c, true) }
+func (h *ChannelMonitorV2Handler) Users(c *gin.Context)         { h.users(c, false) }
+func (h *ChannelMonitorV2Handler) AdminUsers(c *gin.Context)    { h.users(c, true) }
+
+func (h *ChannelMonitorV2Handler) snapshot(c *gin.Context, admin bool) {
+	filter, ok := h.parseFilter(c)
+	if !ok {
+		return
+	}
+	if !h.scopeFilter(c, &filter, admin) {
+		return
+	}
+	result, err := h.service.Snapshot(c.Request.Context(), filter, admin)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, result)
+}
+
+func (h *ChannelMonitorV2Handler) models(c *gin.Context, admin bool) {
+	filter, ok := h.parseFilter(c)
+	if !ok {
+		return
+	}
+	if !h.scopeFilter(c, &filter, admin) {
+		return
+	}
+	result, err := h.service.Models(c.Request.Context(), filter, admin)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, result)
+}
+
+func (h *ChannelMonitorV2Handler) matrix(c *gin.Context, admin bool) {
+	filter, ok := h.parseFilter(c)
+	if !ok {
+		return
+	}
+	groupBy, err := service.ParseChannelMonitorV2GroupBy(c.Query("group_by"))
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	if !h.scopeFilter(c, &filter, admin) {
+		return
+	}
+	result, err := h.service.Matrix(c.Request.Context(), filter, groupBy, admin)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, result)
+}
+
+func (h *ChannelMonitorV2Handler) Errors(c *gin.Context) {
+	filter, ok := h.parseFilter(c)
+	if !ok {
+		return
+	}
+	admin := channelMonitorV2IsAdmin(c)
+	if !h.scopeFilter(c, &filter, admin) {
+		return
+	}
+	result, err := h.service.ErrorsForViewer(c.Request.Context(), filter, admin)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, result)
+}
+
+// QualityEvents GET /channel-monitor-v2/quality-events?group_id=&limit=
+// Surfaces the group's historical degradation probes, including unknown and
+// failed runs so users can inspect the generated artwork.
+func (h *ChannelMonitorV2Handler) QualityEvents(c *gin.Context) {
+	groupID, ok := h.authorizedQualityGroup(c)
+	if !ok {
+		return
+	}
+	limit := 30
+	if raw := strings.TrimSpace(c.Query("limit")); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 && parsed <= 100 {
+			limit = parsed
+		}
+	}
+	events, err := h.service.QualityEvents(c.Request.Context(), groupID, limit)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, gin.H{"group_id": groupID, "events": events})
+}
+
+// QualityArtwork GET /channel-monitor-v2/quality-events/:id/artwork?group_id=
+// Returns the stored artwork of one probe for hover preview.
+func (h *ChannelMonitorV2Handler) QualityArtwork(c *gin.Context) {
+	groupID, ok := h.authorizedQualityGroup(c)
+	if !ok {
+		return
+	}
+	resultID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || resultID <= 0 {
+		response.BadRequest(c, "invalid result id")
+		return
+	}
+	text, err := h.service.QualityArtwork(c.Request.Context(), groupID, resultID)
+	if err != nil {
+		if errors.Is(err, service.ErrGroupQualityEventNotFound) {
+			response.Error(c, http.StatusNotFound, err.Error())
+			return
+		}
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, gin.H{"id": resultID, "group_id": groupID, "response_text": text})
+}
+
+// authorizedQualityGroup resolves the requested group_id and verifies the
+// viewer may see it: administrators pass, ordinary viewers fail closed unless
+// the group is inside their available-group scope.
+func (h *ChannelMonitorV2Handler) authorizedQualityGroup(c *gin.Context) (int64, bool) {
+	groupID, err := strconv.ParseInt(strings.TrimSpace(c.Query("group_id")), 10, 64)
+	if err != nil || groupID <= 0 {
+		response.BadRequest(c, "invalid group_id")
+		return 0, false
+	}
+	if channelMonitorV2IsAdmin(c) {
+		return groupID, true
+	}
+	if h.apiKeyService == nil {
+		response.Error(c, http.StatusInternalServerError, "channel monitor group authorization unavailable")
+		return 0, false
+	}
+	subject, ok := middleware.GetAuthSubjectFromContext(c)
+	if !ok || subject.UserID <= 0 {
+		response.Unauthorized(c, "user not found in context")
+		return 0, false
+	}
+	groups, err := h.apiKeyService.GetAvailableGroups(c.Request.Context(), subject.UserID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return 0, false
+	}
+	for i := range groups {
+		if groups[i].ID == groupID {
+			return groupID, true
+		}
+	}
+	response.Error(c, http.StatusForbidden, "group not available")
+	return 0, false
+}
+
+func (h *ChannelMonitorV2Handler) users(c *gin.Context, admin bool) {
+	filter, ok := h.parseFilter(c)
+	if !ok {
+		return
+	}
+	subject, exists := middleware.GetAuthSubjectFromContext(c)
+	if !exists {
+		response.Error(c, http.StatusUnauthorized, "user not found in context")
+		return
+	}
+	if !h.scopeFilter(c, &filter, admin) {
+		return
+	}
+	result, err := h.service.Users(c.Request.Context(), filter, subject.UserID, admin)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, result)
+}
+
+// scopeFilter applies the authenticated user's server-derived group scope to
+// every read endpoint. Administrators retain the complete configured scope;
+// ordinary viewers fail closed when the authorization dependency is absent.
+func (h *ChannelMonitorV2Handler) scopeFilter(c *gin.Context, filter *service.ChannelMonitorV2Filter, admin bool) bool {
+	if admin {
+		return true
+	}
+	subject, ok := middleware.GetAuthSubjectFromContext(c)
+	if !ok || subject.UserID <= 0 {
+		response.Unauthorized(c, "user not found in context")
+		return false
+	}
+	if h.apiKeyService == nil {
+		response.Error(c, http.StatusInternalServerError, "channel monitor group authorization unavailable")
+		return false
+	}
+	groups, err := h.apiKeyService.GetAvailableGroups(c.Request.Context(), subject.UserID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return false
+	}
+	filter.RestrictGroups = true
+	filter.AllowedGroupIDs = make([]int64, 0, len(groups))
+	for i := range groups {
+		filter.AllowedGroupIDs = append(filter.AllowedGroupIDs, groups[i].ID)
+	}
+	return true
+}
+
+func (h *ChannelMonitorV2Handler) parseFilter(c *gin.Context) (service.ChannelMonitorV2Filter, bool) {
+	groups, err := parseChannelMonitorV2GroupIDs(queryList(c, "group_id"))
+	if err != nil {
+		response.BadRequest(c, "invalid group_id")
+		return service.ChannelMonitorV2Filter{}, false
+	}
+	filter, err := h.service.ParseFilter(c.Query("range"), queryList(c, "platform"), queryList(c, "model"), groups)
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return service.ChannelMonitorV2Filter{}, false
+	}
+	return filter, true
+}
+
+func queryList(c *gin.Context, key string) []string {
+	values := c.QueryArray(key)
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		for _, part := range strings.Split(value, ",") {
+			if part = strings.TrimSpace(part); part != "" {
+				result = append(result, part)
+			}
+		}
+	}
+	return result
+}
+
+func parseChannelMonitorV2GroupIDs(values []string) ([]int64, error) {
+	result := make([]int64, 0, len(values))
+	for _, value := range values {
+		id, err := strconv.ParseInt(value, 10, 64)
+		if err != nil || id <= 0 {
+			return nil, errors.New("invalid group id")
+		}
+		result = append(result, id)
+	}
+	return result, nil
+}

@@ -1,0 +1,548 @@
+/* ============================================================================
+   sub2api Design System v3 — 「Graphite」high-contrast data density
+   ----------------------------------------------------------------------------
+   One token source of truth, two skins:
+
+     .skin-console — user-facing surfaces (brand indigo, calm, light-first)
+     .skin-panel   — admin/ops surfaces (graphite, dense, dark-first)
+
+   v3 changes vs v2:
+     - Neutrals are a cool graphite ramp with real separation between
+       page / surface / sunken, so dense tables read as layers instead of
+       one grey wash.
+     - Ink is near-black (#0b0e14) rather than slate, which lifts body
+       contrast well past AA at small sizes.
+     - Radii are tighter (6/8/10px); shadows are shorter and harder, so
+       hierarchy comes from borders rather than glow.
+     - Motion tokens are exposed as --ds-ease-* / --ds-dur-* so the
+       animation layer (animations.css) and component CSS agree.
+
+   Compatibility: legacy var names (--console-*, --glass-*, --layer-*,
+   --md-*) are re-emitted as aliases so existing vue files keep working.
+   ========================================================================== */
+
+:root {
+  /* ---- Structural (shared by both skins) ---- */
+  --ds-radius-xs: 4px;
+  --ds-radius-sm: 6px;
+  --ds-radius: 8px;
+  --ds-radius-lg: 10px;
+  --ds-radius-xl: 14px;
+  --ds-radius-pill: 999px;
+
+  --ds-space-page: 28px;
+  --ds-space-section: 20px;
+
+  /* ---- Motion ---- */
+  --ds-ease-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --ds-ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ds-ease-snap: cubic-bezier(0.22, 1, 0.36, 1);
+  --ds-ease-in: cubic-bezier(0.7, 0, 0.84, 0);
+  --ds-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ds-dur-instant: 90ms;
+  --ds-dur-fast: 160ms;
+  --ds-dur-base: 240ms;
+  --ds-dur-slow: 420ms;
+  --ds-dur-slower: 700ms;
+
+  /* Surface fills: solid, clean, high-contrast (no muddy wash-out) */
+  --ds-frost: var(--ds-surface);
+  --ds-frost-muted: var(--ds-surface-muted);
+  --ds-frost-hover: var(--ds-surface-muted);
+  --ds-frost-blur: none;
+  --ds-glass-blur: blur(16px) saturate(1.8);
+  --ds-glass-surface: color-mix(in srgb, var(--ds-surface) 88%, transparent);
+
+  /* Brand webfont first (see styles/fonts.css), then the platform UI stacks.
+     The brand face is a single Heavy weight; the system faces after it cover
+     emoji, rare glyphs, and the brief swap window before the font arrives, so
+     text is never invisible and never falls back to a serif default. */
+  --ds-font-sans: "Site Hanyi WenHei", -apple-system, BlinkMacSystemFont, "SF Pro Text",
+    "Segoe UI Variable", "Segoe UI", "PingFang SC", "Noto Sans SC", "Microsoft YaHei",
+    "Hiragino Sans GB", sans-serif;
+  --ds-font-mono: ui-monospace, "SFMono-Regular", "Menlo", "Consolas", monospace;
+
+  /* Display token: brand face only. Used for headings and large numerals where
+     a system-font fallback would be visibly different but never unreadable. */
+  --ds-font-display: "Site Hanyi WenHei", "PingFang SC", "Noto Sans SC",
+    "Microsoft YaHei", sans-serif;
+
+  /* Numerals rendered in the brand face sit slightly wide; tabular figures keep
+     tables and live counters from shifting as digits change. */
+  --ds-font-numeric: "Site Hanyi WenHei", ui-monospace, "SFMono-Regular", "Consolas",
+    monospace;
+
+  /* Stacking order (low → high). Names kept for legacy consumers. */
+  --layer-base: 0;
+  --layer-sticky: 10;
+  --layer-table-sticky: 20;
+  --layer-table-sticky-head: 30;
+  --layer-header: 70;
+  --layer-sidebar-overlay: 55;
+  --layer-sidebar: 60;
+  --layer-modal: 200;
+  --layer-modal-nested: 220;
+  --layer-announcement: 240;
+  --layer-popover: 250;
+  --layer-dropdown: 260;
+  --layer-toast: 300;
+  --layer-tooltip: 320;
+  --layer-onboarding: 400;
+}
+
+/* ============================================================================
+   SKIN: console (user-facing) — light-first, brand indigo
+   ========================================================================== */
+:root,
+.skin-console {
+  /* Neutrals: cool graphite. page < surface < raised, each visibly distinct. */
+  --ds-bg: #f7f8fa;
+  --ds-surface: #ffffff;
+  --ds-surface-muted: #f1f3f6;
+  --ds-surface-sunken: #e8ebef;
+  --ds-border: #e1e5ea;
+  --ds-border-strong: #c8cfd8;
+  --ds-divider: #edf0f3;
+
+  /* Ink: near-black base, AA-safe at 12px for muted, AAA for body. */
+  --ds-ink: #0b0e14;
+  --ds-ink-muted: #5b6472;
+  --ds-ink-faint: #8b95a3;
+
+  --ds-primary: #5b60f5;
+  --ds-primary-hover: #4640e0;
+  --ds-primary-active: #3a33bd;
+  --ds-primary-soft: #eef0ff;
+  --ds-primary-ink: #4640e0;
+  --ds-primary-300: #a6b2ff;
+  --ds-on-primary: #ffffff;
+
+  --ds-accent: #0891b2;
+  --ds-accent-soft: #ecfeff;
+  --ds-violet: #7c3aed;
+  --ds-violet-soft: #f5f3ff;
+  --ds-indigo: #5b60f5;
+  --ds-indigo-soft: #eef0ff;
+
+  --ds-ok: #0f9d58;
+  --ds-ok-soft: #eafaf1;
+  --ds-warn: #c2720a;
+  --ds-warn-soft: #fff7e6;
+  --ds-danger: #d92d20;
+  --ds-danger-soft: #fef3f2;
+  --ds-info: #0d7fc4;
+  --ds-info-soft: #eff8ff;
+
+  --ds-table-header: #f4f6f8;
+  --ds-table-row-hover: #f0f3f7;
+  --ds-overlay-scrim: rgba(11, 14, 20, 0.50);
+
+  /* Short, hard shadows — hierarchy comes from borders, not glow. */
+  --ds-shadow-xs: 0 1px 1px rgba(9, 12, 20, 0.05);
+  --ds-shadow-sm: 0 1px 2px rgba(9, 12, 20, 0.07), 0 1px 1px rgba(9, 12, 20, 0.04);
+  --ds-shadow-md: 0 4px 10px -2px rgba(9, 12, 20, 0.10), 0 2px 4px -2px rgba(9, 12, 20, 0.06);
+  --ds-shadow-lg: 0 16px 40px -12px rgba(9, 12, 20, 0.22), 0 4px 12px -4px rgba(9, 12, 20, 0.10);
+  --ds-shadow-menu: 0 16px 40px -12px rgba(9, 12, 20, 0.24), 0 2px 6px rgba(9, 12, 20, 0.08);
+
+  --ds-card-ring: 0 0 0 1px var(--ds-border);
+  --ds-card-glow: var(--ds-shadow-sm);
+  --ds-card-glow-hover: var(--ds-shadow-md);
+
+  --ds-focus-ring: 0 0 0 3px rgba(91, 96, 245, 0.30);
+
+  color-scheme: light;
+}
+
+html.dark,
+html.dark.skin-console,
+.skin-console.dark {
+  --ds-bg: #07080b;
+  --ds-surface: #101318;
+  --ds-surface-muted: #161a21;
+  --ds-surface-sunken: #0b0e13;
+  --ds-border: rgba(255, 255, 255, 0.10);
+  --ds-border-strong: rgba(255, 255, 255, 0.20);
+  --ds-divider: rgba(255, 255, 255, 0.07);
+
+  --ds-ink: #f4f6f9;
+  --ds-ink-muted: #98a2b0;
+  --ds-ink-faint: #6b7583;
+
+  --ds-primary: #7d87ff;
+  --ds-primary-hover: #a6b2ff;
+  --ds-primary-active: #5b60f5;
+  --ds-primary-soft: rgba(125, 135, 255, 0.14);
+  --ds-primary-ink: #a6b2ff;
+  --ds-primary-300: #a6b2ff;
+  --ds-on-primary: #0c0e1a;
+
+  --ds-accent: #22d3ee;
+  --ds-accent-soft: rgba(34, 211, 238, 0.12);
+  --ds-violet: #a78bfa;
+  --ds-violet-soft: rgba(167, 139, 250, 0.12);
+  --ds-indigo: #7d87ff;
+  --ds-indigo-soft: rgba(125, 135, 255, 0.14);
+
+  --ds-ok: #3ddc84;
+  --ds-ok-soft: rgba(61, 220, 132, 0.12);
+  --ds-warn: #fbbf24;
+  --ds-warn-soft: rgba(251, 191, 36, 0.12);
+  --ds-danger: #ff6b5e;
+  --ds-danger-soft: rgba(255, 107, 94, 0.12);
+  --ds-info: #38bdf8;
+  --ds-info-soft: rgba(56, 189, 248, 0.12);
+
+  --ds-table-header: #12161d;
+  --ds-table-row-hover: #171c24;
+  --ds-overlay-scrim: rgba(0, 0, 0, 0.62);
+
+  --ds-shadow-xs: 0 1px 1px rgba(0, 0, 0, 0.6);
+  --ds-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.55), 0 1px 1px rgba(0, 0, 0, 0.4);
+  --ds-shadow-md: 0 4px 12px -2px rgba(0, 0, 0, 0.6), 0 2px 4px -2px rgba(0, 0, 0, 0.45);
+  --ds-shadow-lg: 0 18px 44px -12px rgba(0, 0, 0, 0.8), 0 4px 14px -4px rgba(0, 0, 0, 0.55);
+  --ds-shadow-menu: 0 18px 44px -12px rgba(0, 0, 0, 0.85), 0 2px 8px rgba(0, 0, 0, 0.55);
+
+  --ds-card-ring: 0 0 0 1px var(--ds-border);
+  --ds-card-glow: var(--ds-shadow-sm);
+  --ds-card-glow-hover: var(--ds-shadow-md);
+
+  --ds-focus-ring: 0 0 0 3px rgba(125, 135, 255, 0.35);
+
+  color-scheme: dark;
+}
+
+/* ============================================================================
+   SKIN: panel (admin/ops) — dense graphite, dark-first
+   ========================================================================== */
+.skin-panel {
+  --ds-bg: #f7f8fa;
+  --ds-surface: #ffffff;
+  --ds-surface-muted: #f1f3f6;
+  --ds-surface-sunken: #e8ebef;
+  --ds-border: #e1e5ea;
+  --ds-border-strong: #c8cfd8;
+  --ds-divider: #edf0f3;
+  --ds-ink: #0b0e14;
+  --ds-ink-muted: #5b6472;
+  --ds-ink-faint: #8b95a3;
+
+  --ds-primary: #5b60f5;
+  --ds-primary-hover: #4640e0;
+  --ds-primary-active: #3a33bd;
+  --ds-primary-soft: #eef0ff;
+  --ds-primary-ink: #4640e0;
+  --ds-primary-300: #a6b2ff;
+  --ds-on-primary: #ffffff;
+
+  --ds-accent: #0891b2;
+  --ds-accent-soft: #ecfeff;
+  --ds-violet: #7c3aed;
+  --ds-violet-soft: #f5f3ff;
+  --ds-indigo: #5b60f5;
+  --ds-indigo-soft: #eef0ff;
+
+  --ds-ok: #0f9d58;
+  --ds-ok-soft: #eafaf1;
+  --ds-warn: #c2720a;
+  --ds-warn-soft: #fff7e6;
+  --ds-danger: #d92d20;
+  --ds-danger-soft: #fef3f2;
+  --ds-info: #0d7fc4;
+  --ds-info-soft: #eff8ff;
+
+  --ds-table-header: #f4f6f8;
+  --ds-table-row-hover: #f0f3f7;
+  --ds-overlay-scrim: rgba(11, 14, 20, 0.50);
+
+  --ds-radius-xs: 4px;
+  --ds-radius-sm: 6px;
+  --ds-radius: 8px;
+  --ds-radius-lg: 10px;
+
+  --ds-shadow-xs: 0 1px 1px rgba(9, 12, 20, 0.05);
+  --ds-shadow-sm: 0 1px 2px rgba(9, 12, 20, 0.07), 0 1px 1px rgba(9, 12, 20, 0.04);
+  --ds-shadow-md: 0 4px 10px -2px rgba(9, 12, 20, 0.10), 0 2px 4px -2px rgba(9, 12, 20, 0.06);
+  --ds-shadow-lg: 0 16px 40px -12px rgba(9, 12, 20, 0.22), 0 4px 12px -4px rgba(9, 12, 20, 0.10);
+  --ds-shadow-menu: 0 16px 40px -12px rgba(9, 12, 20, 0.24), 0 2px 6px rgba(9, 12, 20, 0.08);
+
+  --ds-card-ring: 0 0 0 1px var(--ds-border);
+  --ds-card-glow: var(--ds-shadow-sm);
+  --ds-card-glow-hover: var(--ds-shadow-md);
+
+  --ds-focus-ring: 0 0 0 3px rgba(91, 96, 245, 0.30);
+
+  color-scheme: light;
+}
+
+html.dark.skin-panel,
+.skin-panel.dark {
+  --ds-bg: #07080b;
+  --ds-surface: #101318;
+  --ds-surface-muted: #161a21;
+  --ds-surface-sunken: #0b0e13;
+  --ds-border: rgba(255, 255, 255, 0.10);
+  --ds-border-strong: rgba(255, 255, 255, 0.20);
+  --ds-divider: rgba(255, 255, 255, 0.07);
+  --ds-ink: #f4f6f9;
+  --ds-ink-muted: #98a2b0;
+  --ds-ink-faint: #6b7583;
+
+  --ds-primary: #7d87ff;
+  --ds-primary-hover: #a6b2ff;
+  --ds-primary-active: #5b60f5;
+  --ds-primary-soft: rgba(125, 135, 255, 0.14);
+  --ds-primary-ink: #a6b2ff;
+  --ds-primary-300: #a6b2ff;
+  --ds-on-primary: #0c0e1a;
+
+  --ds-accent: #22d3ee;
+  --ds-accent-soft: rgba(34, 211, 238, 0.12);
+  --ds-violet: #a78bfa;
+  --ds-violet-soft: rgba(167, 139, 250, 0.12);
+  --ds-indigo: #7d87ff;
+  --ds-indigo-soft: rgba(125, 135, 255, 0.14);
+
+  --ds-ok: #3ddc84;
+  --ds-ok-soft: rgba(61, 220, 132, 0.12);
+  --ds-warn: #fbbf24;
+  --ds-warn-soft: rgba(251, 191, 36, 0.12);
+  --ds-danger: #ff6b5e;
+  --ds-danger-soft: rgba(255, 107, 94, 0.12);
+  --ds-info: #38bdf8;
+  --ds-info-soft: rgba(56, 189, 248, 0.12);
+
+  --ds-table-header: #12161d;
+  --ds-table-row-hover: #171c24;
+  --ds-overlay-scrim: rgba(0, 0, 0, 0.62);
+
+  --ds-shadow-xs: 0 1px 1px rgba(0, 0, 0, 0.6);
+  --ds-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.55), 0 1px 1px rgba(0, 0, 0, 0.4);
+  --ds-shadow-md: 0 4px 12px -2px rgba(0, 0, 0, 0.6), 0 2px 4px -2px rgba(0, 0, 0, 0.45);
+  --ds-shadow-lg: 0 18px 44px -12px rgba(0, 0, 0, 0.8), 0 4px 14px -4px rgba(0, 0, 0, 0.55);
+  --ds-shadow-menu: 0 18px 44px -12px rgba(0, 0, 0, 0.85), 0 2px 8px rgba(0, 0, 0, 0.55);
+
+  --ds-card-ring: 0 0 0 1px var(--ds-border);
+  --ds-card-glow: var(--ds-shadow-sm);
+  --ds-card-glow-hover: var(--ds-shadow-md);
+
+  --ds-focus-ring: 0 0 0 3px rgba(125, 135, 255, 0.35);
+
+  color-scheme: dark;
+}
+
+/* ============================================================================
+   Legacy aliases — keep existing var() references working.
+   ========================================================================== */
+:root,
+.skin-console,
+.skin-panel {
+  --console-bg: var(--ds-bg);
+  --console-surface: var(--ds-surface);
+  --console-surface-muted: var(--ds-surface-muted);
+  --console-border: var(--ds-border);
+  --console-border-strong: var(--ds-border-strong);
+  --console-ink: var(--ds-ink);
+  --console-ink-muted: var(--ds-ink-muted);
+  --console-primary: var(--ds-primary);
+  --console-primary-hover: var(--ds-primary-hover);
+  --console-primary-soft: var(--ds-primary-soft);
+  --console-primary-ink: var(--ds-primary-ink);
+  --console-blue: var(--ds-primary);
+  --console-blue-hover: var(--ds-primary-hover);
+  --console-blue-soft: var(--ds-primary-soft);
+  --console-teal: var(--ds-primary);
+  --console-teal-soft: var(--ds-primary-soft);
+  --console-cyan: var(--ds-accent);
+  --console-cyan-soft: var(--ds-accent-soft);
+  --console-violet: var(--ds-violet);
+  --console-violet-soft: var(--ds-violet-soft);
+  --console-indigo: var(--ds-indigo);
+  --console-indigo-soft: var(--ds-indigo-soft);
+  --console-coral: var(--ds-danger);
+  --console-coral-soft: var(--ds-danger-soft);
+  --console-green: var(--ds-ok);
+  --console-green-soft: var(--ds-ok-soft);
+  --console-amber: var(--ds-warn);
+  --console-amber-soft: var(--ds-warn-soft);
+  --console-red: var(--ds-danger);
+  --console-red-soft: var(--ds-danger-soft);
+  --console-sky: var(--ds-info);
+  --console-sky-soft: var(--ds-info-soft);
+  --console-shadow: var(--ds-shadow-sm);
+  --console-shadow-menu: var(--ds-shadow-menu);
+  --console-radius: var(--ds-radius);
+  --console-radius-sm: var(--ds-radius-sm);
+  --console-table-header: var(--ds-table-header);
+  --console-table-row-hover: var(--ds-table-row-hover);
+  --console-table-divider: var(--ds-divider);
+  --console-status-ok: var(--ds-ok);
+  --console-status-ok-soft: var(--ds-ok-soft);
+  --console-space-page: var(--ds-space-page);
+  --console-space-section: var(--ds-space-section);
+
+  /* Material-style aliases (style.css consumers) */
+  --md-primary: var(--ds-primary);
+  --md-on-primary: var(--ds-on-primary);
+  --md-background: var(--ds-bg);
+  --md-surface: var(--ds-surface);
+  --md-on-surface: var(--ds-ink);
+  --md-on-surface-variant: var(--ds-ink-muted);
+  --md-error: var(--ds-danger);
+
+  /* Glass aliases now resolve to flat surfaces (glass removed in v2) */
+  --glass-surface: var(--ds-surface);
+  --glass-surface-strong: var(--ds-surface);
+  --glass-border: var(--ds-border);
+  --glass-divider: var(--ds-divider);
+  --glass-shadow: var(--ds-shadow-sm);
+  --glass-shadow-soft: var(--ds-shadow-xs);
+
+  --surface-page: var(--ds-bg);
+  --surface-panel: var(--ds-surface);
+  --ink-strong: var(--ds-ink);
+  --ink-muted: var(--ds-ink-muted);
+}
+
+/* ============================================================================
+   Base element resets
+   ========================================================================== */
+html {
+  background: var(--ds-bg);
+}
+
+body {
+  font-family: var(--ds-font-sans);
+  font-feature-settings: "tnum" 1, "cv01" 1;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  color: var(--ds-ink);
+  background: var(--ds-bg);
+}
+
+/* ============================================================================
+   Typography — brand webfont tuning
+   ----------------------------------------------------------------------------
+   The brand face is a single Heavy weight with no lighter companion. Two things
+   follow from that and are handled here:
+
+   1. Weight. The @font-face declares `font-weight: 100 900`, so the browser
+      never synthesises a fake bold. But headings that already asked for 600-800
+      would land on the same outlines as body text and lose their hierarchy.
+      Hierarchy is therefore carried by size, letter-spacing and colour rather
+      than by weight, and headings get a slight negative tracking because the
+      Heavy outlines look loose at large sizes.
+
+   2. Size. Heavy CJK outlines read smaller than a light face at the same px, so
+      body copy gets a touch more line-height and CJK text gets a small
+      letter-spacing to keep dense tables from looking cramped.
+   ========================================================================== */
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-family: var(--ds-font-display);
+  letter-spacing: -0.011em;
+  color: var(--ds-ink);
+}
+
+h1 {
+  letter-spacing: -0.019em;
+}
+
+h2 {
+  letter-spacing: -0.014em;
+}
+
+/* Small caps-ish labels and table headers: the Heavy face needs more air when
+   set small, otherwise adjacent glyphs visually merge. */
+th,
+label,
+.ds-label {
+  letter-spacing: 0.006em;
+}
+
+/* Long-form prose: CJK needs more leading than Latin at the same size. */
+p,
+li,
+dd,
+dt,
+blockquote {
+  line-height: 1.7;
+}
+
+/* Numerals: tabular figures so live counters and tables do not jitter as digits
+   change width. Applied to the contexts where numbers are actually compared. */
+.tabular-nums,
+table td,
+table th,
+time,
+code,
+kbd,
+samp,
+pre {
+  font-variant-numeric: tabular-nums;
+}
+
+code,
+kbd,
+samp,
+pre {
+  font-family: var(--ds-font-mono);
+  font-feature-settings: normal;
+}
+
+/* The Heavy face has no true italic. A synthetic oblique on CJK looks broken,
+   so fall back to the system stack for emphasised text instead of slanting it. */
+em,
+i,
+cite,
+dfn,
+var {
+  font-style: normal;
+  font-family: var(--ds-font-sans);
+}
+
+/* Placeholders in inputs: the full-strength ink colour of this face is too loud
+   for hint text, so drop it a step without going below the contrast floor. */
+::placeholder {
+  color: color-mix(in srgb, var(--ds-ink-faint) 88%, transparent);
+  opacity: 1;
+}
+
+/* Keep the brand face out of icon-only and emoji contexts: it has no emoji or
+   symbol glyphs, and letting it claim those codepoints would render tofu
+   instead of falling through to the platform emoji font. */
+.emoji,
+[data-emoji] {
+  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--ds-primary) 24%, transparent);
+}
+
+input[type="checkbox"],
+input[type="radio"] {
+  accent-color: var(--ds-primary);
+}
+
+/* Focus visibility: never remove the ring, only restyle it. Keyboard users need
+   it, and the high-contrast palette makes a 3px indigo halo readable on both
+   the light and dark surfaces. */
+:focus-visible {
+  outline: 2px solid var(--ds-primary);
+  outline-offset: 2px;
+}
+
+/* Thin, unobtrusive scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+*:hover,
+*:focus-within {
+  scrollbar-color: color-mix(in srgb, var(--ds-ink-faint) 55%, transparent) transparent;
+}

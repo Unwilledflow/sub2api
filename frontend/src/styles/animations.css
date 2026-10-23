@@ -1,0 +1,952 @@
+/* ============================================================================
+   sub2api Motion Layer — 「Graphite」theme
+   ----------------------------------------------------------------------------
+   The intentional-motion layer for the v3 theme. Everything here is opt-in via
+   a class, so a component only gets the drama it asks for.
+
+   Gated twice:
+     1. `prefers-reduced-motion: reduce` collapses every duration to ~0 and
+        strips transforms (see the block at the end). This is not optional —
+        vestibular disorders are real and a data tool is used for hours.
+     2. `html[data-motion="off"]` lets the app expose an in-product switch on
+        top of the OS preference.
+
+   Naming: .mo-* (motion) so it never collides with Tailwind utilities.
+   ========================================================================== */
+
+:root {
+  --mo-stagger: 42ms;
+  --mo-lift: -3px;
+  --mo-press: 0.972;
+  --mo-row-stagger: 22ms;
+}
+
+/* ============================================================================
+   1. Route / view transitions
+   ----------------------------------------------------------------------------
+   A page change should read as "the next screen arrived", not as a 3D move.
+   Kept to opacity + a short vertical offset on one axis: no blur (it forces a
+   composited layer per frame and looks muddy on text) and no scale (it makes
+   dense tables shimmer). The leaving page stays in flow and fades out
+   underneath, so the viewport is never empty while the next chunk downloads.
+   ========================================================================== */
+.mo-page-enter-active {
+  transition:
+    opacity var(--ds-dur-base) var(--ds-ease-out),
+    transform var(--ds-dur-base) var(--ds-ease-out);
+}
+.mo-page-leave-active {
+  transition:
+    opacity var(--ds-dur-fast) var(--ds-ease-in),
+    transform var(--ds-dur-fast) var(--ds-ease-in);
+  pointer-events: none;
+}
+.mo-page-enter-from {
+  opacity: 0;
+  transform: translateY(10px);
+}
+.mo-page-leave-to {
+  opacity: 0;
+  transform: translateY(-6px);
+}
+
+/* ============================================================================
+   2. Entrance choreography — staggered reveals
+   ----------------------------------------------------------------------------
+   Apply .mo-rise to a container and .mo-stagger to its children; the container
+   drives the cascade with --mo-i so no per-item inline style is needed.
+   ========================================================================== */
+@keyframes moRise {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes moPop {
+  0% {
+    opacity: 0;
+    transform: scale(0.86);
+  }
+  60% {
+    transform: scale(1.028);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes moSlideLeft {
+  from {
+    opacity: 0;
+    transform: translateX(26px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.mo-rise {
+  animation: moRise var(--ds-dur-slow) var(--ds-ease-expo) both;
+}
+
+.mo-pop {
+  animation: moPop var(--ds-dur-slow) var(--ds-ease-spring) both;
+}
+
+.mo-slide-left {
+  animation: moSlideLeft var(--ds-dur-slow) var(--ds-ease-expo) both;
+}
+
+/* Staggered children: each child starts later than the previous one. Capped at
+   20 steps so a 500-row table does not take 21 seconds to appear. */
+.mo-stagger > * {
+  animation: moRise var(--ds-dur-slow) var(--ds-ease-expo) both;
+  animation-delay: calc(var(--mo-i, 0) * var(--mo-stagger));
+}
+.mo-stagger > *:nth-child(1) { --mo-i: 0; }
+.mo-stagger > *:nth-child(2) { --mo-i: 1; }
+.mo-stagger > *:nth-child(3) { --mo-i: 2; }
+.mo-stagger > *:nth-child(4) { --mo-i: 3; }
+.mo-stagger > *:nth-child(5) { --mo-i: 4; }
+.mo-stagger > *:nth-child(6) { --mo-i: 5; }
+.mo-stagger > *:nth-child(7) { --mo-i: 6; }
+.mo-stagger > *:nth-child(8) { --mo-i: 7; }
+.mo-stagger > *:nth-child(9) { --mo-i: 8; }
+.mo-stagger > *:nth-child(10) { --mo-i: 9; }
+.mo-stagger > *:nth-child(n + 11) { --mo-i: 10; }
+
+/* Table rows: the same cascade, but rows are cheap so they run tighter. */
+.mo-stagger-rows tbody tr {
+  animation: moRise var(--ds-dur-base) var(--ds-ease-expo) both;
+  animation-delay: calc(var(--mo-i, 0) * 26ms);
+}
+.mo-stagger-rows tbody tr:nth-child(1) { --mo-i: 0; }
+.mo-stagger-rows tbody tr:nth-child(2) { --mo-i: 1; }
+.mo-stagger-rows tbody tr:nth-child(3) { --mo-i: 2; }
+.mo-stagger-rows tbody tr:nth-child(4) { --mo-i: 3; }
+.mo-stagger-rows tbody tr:nth-child(5) { --mo-i: 4; }
+.mo-stagger-rows tbody tr:nth-child(6) { --mo-i: 5; }
+.mo-stagger-rows tbody tr:nth-child(7) { --mo-i: 6; }
+.mo-stagger-rows tbody tr:nth-child(8) { --mo-i: 7; }
+.mo-stagger-rows tbody tr:nth-child(9) { --mo-i: 8; }
+.mo-stagger-rows tbody tr:nth-child(10) { --mo-i: 9; }
+.mo-stagger-rows tbody tr:nth-child(n + 11) { --mo-i: 10; }
+
+/* ============================================================================
+   3. Hover / press physics
+   ========================================================================== */
+
+/* Cards lift and cast a longer shadow; the border brightens at the same time so
+   the edge stays crisp rather than blurring into the shadow. */
+.mo-lift {
+  transition:
+    transform var(--ds-dur-base) var(--ds-ease-spring),
+    box-shadow var(--ds-dur-base) var(--ds-ease-expo),
+    border-color var(--ds-dur-fast) linear;
+  will-change: transform;
+}
+.mo-lift:hover {
+  transform: translateY(var(--mo-lift));
+  box-shadow: var(--ds-shadow-md);
+}
+
+/* Press feedback for anything clickable. The scale is deliberately tiny — at
+   0.97 a button visibly "gives" without the layout jumping. */
+.mo-press {
+  transition: transform var(--ds-dur-instant) var(--ds-ease-out, ease-out);
+}
+.mo-press:active {
+  transform: scale(var(--mo-press));
+}
+
+/* Primary-button sheen: a light sweep crosses the button on hover. Uses a
+   pseudo-element so it never affects layout or text contrast. */
+.mo-sheen {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+}
+.mo-sheen::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: linear-gradient(
+    110deg,
+    transparent 22%,
+    rgba(255, 255, 255, 0.34) 50%,
+    transparent 78%
+  );
+  transform: translateX(-130%);
+  transition: transform var(--ds-dur-slower) var(--ds-ease-expo);
+  pointer-events: none;
+}
+.mo-sheen:hover::after {
+  transform: translateX(130%);
+}
+
+/* Underline that grows from the left — used by tabs and inline nav links. */
+.mo-underline {
+  position: relative;
+}
+.mo-underline::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -2px;
+  height: 2px;
+  border-radius: 2px;
+  background: currentColor;
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform var(--ds-dur-base) var(--ds-ease-expo);
+}
+.mo-underline:hover::after,
+.mo-underline[aria-selected="true"]::after,
+.mo-underline.is-active::after {
+  transform: scaleX(1);
+}
+
+/* Icon nudge: a chevron / arrow leans in the direction it points. */
+.mo-nudge {
+  transition: transform var(--ds-dur-base) var(--ds-ease-spring);
+}
+.mo-nudge:hover {
+  transform: translateX(4px);
+}
+
+/* ============================================================================
+   4. Attention — for live data that just changed
+   ========================================================================== */
+
+/* A number that changed value gets a brief scale-up and a colour flash. */
+@keyframes moFlashUp {
+  0% {
+    transform: scale(1);
+    color: inherit;
+  }
+  35% {
+    transform: scale(1.16);
+    color: var(--ds-ok);
+  }
+  100% {
+    transform: scale(1);
+    color: inherit;
+  }
+}
+@keyframes moFlashDown {
+  0% {
+    transform: scale(1);
+    color: inherit;
+  }
+  35% {
+    transform: scale(1.16);
+    color: var(--ds-danger);
+  }
+  100% {
+    transform: scale(1);
+    color: inherit;
+  }
+}
+.mo-flash-up {
+  animation: moFlashUp var(--ds-dur-slower) var(--ds-ease-expo);
+  display: inline-block;
+}
+.mo-flash-down {
+  animation: moFlashDown var(--ds-dur-slower) var(--ds-ease-expo);
+  display: inline-block;
+}
+
+/* Pulsing halo for live/online indicators. */
+@keyframes moPulseRing {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--ds-ok) 55%, transparent);
+  }
+  70% {
+    box-shadow: 0 0 0 9px color-mix(in srgb, var(--ds-ok) 0%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--ds-ok) 0%, transparent);
+  }
+}
+.mo-live {
+  animation: moPulseRing 2.1s var(--ds-ease-expo) infinite;
+}
+
+/* One-shot halo when a value or row is freshly updated. */
+@keyframes moRingOnce {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--ds-primary) 46%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 14px color-mix(in srgb, var(--ds-primary) 0%, transparent);
+  }
+}
+.mo-ring-once {
+  animation: moRingOnce var(--ds-dur-slower) var(--ds-ease-expo);
+}
+
+/* ============================================================================
+   5. Loading — skeleton sweep and orbit spinner
+   ========================================================================== */
+
+/* Skeleton: a light band sweeps across the placeholder instead of a flat pulse,
+   which reads as "loading" rather than "broken grey box". */
+@keyframes moSweep {
+  0% {
+    background-position: -180% 0;
+  }
+  100% {
+    background-position: 180% 0;
+  }
+}
+.mo-skeleton {
+  background-image: linear-gradient(
+    100deg,
+    transparent 20%,
+    color-mix(in srgb, var(--ds-surface) 72%, transparent) 50%,
+    transparent 80%
+  );
+  background-size: 200% 100%;
+  background-repeat: no-repeat;
+  animation: moSweep 1.5s linear infinite;
+}
+
+@keyframes moOrbit {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.mo-orbit {
+  animation: moOrbit 0.9s linear infinite;
+}
+
+/* Determinate progress: the fill gets a moving stripe so long operations look
+   alive even when the percentage is not moving. */
+@keyframes moStripe {
+  to {
+    background-position: 28px 0;
+  }
+}
+.mo-stripes {
+  background-image: linear-gradient(
+    115deg,
+    rgba(255, 255, 255, 0.28) 25%,
+    transparent 25%,
+    transparent 50%,
+    rgba(255, 255, 255, 0.28) 50%,
+    rgba(255, 255, 255, 0.28) 75%,
+    transparent 75%
+  );
+  background-size: 28px 28px;
+  animation: moStripe 0.75s linear infinite;
+}
+
+/* ============================================================================
+   6. Overlays — modal, dropdown, toast
+   ========================================================================== */
+
+.mo-modal-enter-active .mo-modal-panel {
+  transition:
+    transform var(--ds-dur-slow) var(--ds-ease-spring),
+    opacity var(--ds-dur-base) var(--ds-ease-expo);
+}
+.mo-modal-leave-active .mo-modal-panel {
+  transition:
+    transform var(--ds-dur-fast) var(--ds-ease-in),
+    opacity var(--ds-dur-fast) var(--ds-ease-in);
+}
+.mo-modal-enter-from .mo-modal-panel {
+  opacity: 0;
+  transform: scale(0.93) translateY(18px);
+}
+.mo-modal-leave-to .mo-modal-panel {
+  opacity: 0;
+  transform: scale(0.97) translateY(8px);
+}
+
+@keyframes moDropIn {
+  from {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.mo-drop-in {
+  animation: moDropIn var(--ds-dur-fast) var(--ds-ease-spring) both;
+  transform-origin: top;
+}
+
+@keyframes moToastIn {
+  0% {
+    opacity: 0;
+    transform: translateX(120%) scale(0.94);
+  }
+  70% {
+    transform: translateX(-8px) scale(1.01);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes moToastOut {
+  to {
+    opacity: 0;
+    transform: translateX(120%) scale(0.96);
+  }
+}
+.mo-toast-in {
+  animation: moToastIn var(--ds-dur-slow) var(--ds-ease-spring) both;
+}
+.mo-toast-out {
+  animation: moToastOut var(--ds-dur-base) var(--ds-ease-in) both;
+}
+
+/* ============================================================================
+   7. Drawers / side panels — slide with overshoot
+   ========================================================================== */
+@keyframes moDrawerIn {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: none;
+  }
+}
+.mo-drawer-in {
+  animation: moDrawerIn var(--ds-dur-slow) var(--ds-ease-expo) both;
+}
+
+/* Sidebar nav indicator: the active pill grows from the left. */
+.mo-indicator {
+  position: relative;
+}
+.mo-indicator::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  height: 60%;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--ds-primary);
+  transform: translateY(-50%) scaleY(0);
+  transform-origin: center;
+  transition: transform var(--ds-dur-base) var(--ds-ease-spring);
+}
+.mo-indicator.is-active::before,
+.mo-indicator[aria-current="page"]::before {
+  transform: translateY(-50%) scaleY(1);
+}
+
+/* ============================================================================
+   8. Ambient — decorative, non-blocking
+   ========================================================================== */
+
+/* Slow drifting gradient, for hero/empty-state backdrops only. */
+@keyframes moDrift {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  33% {
+    transform: translate3d(2%, -2%, 0) scale(1.04);
+  }
+  66% {
+    transform: translate3d(-2%, 1%, 0) scale(0.98);
+  }
+}
+.mo-drift {
+  animation: moDrift 18s ease-in-out infinite;
+}
+
+/* Text that cycles a gradient — reserved for the single brand wordmark. */
+@keyframes moTextFlow {
+  to {
+    background-position: 200% center;
+  }
+}
+.mo-text-flow {
+  background-size: 200% auto;
+  animation: moTextFlow 5s linear infinite;
+}
+
+/* ============================================================================
+   9. Auto-apply — the same choreography, wired to the existing semantic classes
+   ----------------------------------------------------------------------------
+   Editing 171 `.card` sites and 10 `.table` sites to add .mo-* would be churn
+   for no gain. Instead the shell classes get the motion directly.
+
+   Every rule here uses :where() so specificity stays 0. An explicit .mo-* class
+   or a component's own animation always wins; these are defaults, not overrides.
+   ========================================================================== */
+
+@media (prefers-reduced-motion: no-preference) {
+  /* --- Page content cascades in, one child after another ------------------
+     .signal-main is the console content column; its direct children are the
+     page heading, filter bar, cards, tables. They fold in on every route
+     change because the router remounts the view (key=route.path). */
+  :where(.signal-main) > * {
+    animation: moRise var(--ds-dur-slow) var(--ds-ease-expo) both;
+    animation-delay: calc(var(--mo-i, 0) * var(--mo-stagger));
+  }
+  :where(.signal-main) > *:nth-child(1) { --mo-i: 0; }
+  :where(.signal-main) > *:nth-child(2) { --mo-i: 1; }
+  :where(.signal-main) > *:nth-child(3) { --mo-i: 2; }
+  :where(.signal-main) > *:nth-child(4) { --mo-i: 3; }
+  :where(.signal-main) > *:nth-child(5) { --mo-i: 4; }
+  :where(.signal-main) > *:nth-child(6) { --mo-i: 5; }
+  :where(.signal-main) > *:nth-child(n + 7) { --mo-i: 6; }
+
+  /* --- Cards lift on hover, and settle back with a spring ----------------- */
+  :where(.card, .stat-card, .feature-card-v2, .step-card, .plaza-group) {
+    transition:
+      transform var(--ds-dur-base) var(--ds-ease-spring),
+      box-shadow var(--ds-dur-base) var(--ds-ease-expo),
+      border-color var(--ds-dur-fast) linear;
+  }
+
+  /* --- Table rows cascade; hover slides a hair to the right --------------- */
+  :where(.table) tbody tr,
+  :where(.plaza-pricing-table) tbody tr {
+    animation: moRise var(--ds-dur-base) var(--ds-ease-expo) both;
+    animation-delay: calc(var(--mo-i, 0) * var(--mo-row-stagger, 22ms));
+    transition:
+      background-color var(--ds-dur-fast) linear,
+      transform var(--ds-dur-fast) var(--ds-ease-out);
+  }
+  :where(.table, .plaza-pricing-table) tbody tr:nth-child(1) { --mo-i: 0; }
+  :where(.table, .plaza-pricing-table) tbody tr:nth-child(2) { --mo-i: 1; }
+  :where(.table, .plaza-pricing-table) tbody tr:nth-child(3) { --mo-i: 2; }
+  :where(.table, .plaza-pricing-table) tbody tr:nth-child(4) { --mo-i: 3; }
+  :where(.table, .plaza-pricing-table) tbody tr:nth-child(5) { --mo-i: 4; }
+  :where(.table, .plaza-pricing-table) tbody tr:nth-child(6) { --mo-i: 5; }
+  :where(.table, .plaza-pricing-table) tbody tr:nth-child(7) { --mo-i: 6; }
+  :where(.table, .plaza-pricing-table) tbody tr:nth-child(8) { --mo-i: 7; }
+  :where(.table, .plaza-pricing-table) tbody tr:nth-child(n + 9) { --mo-i: 8; }
+
+  /* --- Overlays: dropdowns drop, modals spring, toasts fly in ------------- */
+  :where(.dropdown) {
+    animation: moDropIn var(--ds-dur-fast) var(--ds-ease-spring) both;
+    transform-origin: top;
+  }
+
+  :where(.modal-content) {
+    animation: moModalPop var(--ds-dur-slow) var(--ds-ease-spring) both;
+  }
+
+  :where(.dialog-container) {
+    animation: moModalPop var(--ds-dur-slow) var(--ds-ease-spring) both;
+  }
+
+  :where(.toast) {
+    animation: moToastIn var(--ds-dur-slow) var(--ds-ease-spring) both;
+  }
+
+  /* --- Buttons give under the finger ------------------------------------- */
+  :where(.btn, .primary-action, .header-action, .icon-button, .copy-button) {
+    transition:
+      transform var(--ds-dur-instant) var(--ds-ease-out),
+      background-color var(--ds-dur-fast) linear,
+      border-color var(--ds-dur-fast) linear,
+      color var(--ds-dur-fast) linear,
+      box-shadow var(--ds-dur-base) var(--ds-ease-expo);
+  }
+  :where(.btn, .primary-action, .header-action, .icon-button):active:not(:disabled) {
+    transform: scale(var(--mo-press));
+  }
+
+  /* --- Tabs: the active underline slides in ------------------------------ */
+  :where(.tab)::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: -1px;
+    height: 2px;
+    border-radius: 2px;
+    background: var(--ds-primary);
+    transform: scaleX(0);
+    transform-origin: left;
+    transition: transform var(--ds-dur-base) var(--ds-ease-expo);
+  }
+  :where(.tab) {
+    position: relative;
+  }
+  :where(.tab-active)::after,
+  :where(.tab:hover)::after {
+    transform: scaleX(1);
+  }
+
+  /* --- Empty states breathe in ------------------------------------------- */
+  :where(.empty-state-icon) {
+    animation: moPop var(--ds-dur-slower) var(--ds-ease-spring) both;
+  }
+
+  /* --- Progress fills get a live stripe ---------------------------------- */
+  :where(.progress-bar) {
+    background-image: linear-gradient(
+      115deg,
+      rgba(255, 255, 255, 0.26) 25%,
+      transparent 25%,
+      transparent 50%,
+      rgba(255, 255, 255, 0.26) 50%,
+      rgba(255, 255, 255, 0.26) 75%,
+      transparent 75%
+    );
+    background-size: 28px 28px;
+    animation: moStripe 0.85s linear infinite;
+    transition: width var(--ds-dur-slow) var(--ds-ease-expo);
+  }
+
+  /* --- Live status dots pulse -------------------------------------------- */
+  :where(.status-dot, .live-status > span:first-child) {
+    animation: moPulseRing 2.1s var(--ds-ease-expo) infinite;
+  }
+
+  /* ==========================================================================
+     Batch B — the "lots of pretty animation" pass
+     --------------------------------------------------------------------------
+     All of it is still (a) opt-in by class or semantic selector, (b) :where()
+     scoped so it can be overridden, and (c) mirrored in the reduced-motion
+     blocks at the bottom of this file.
+     ======================================================================== */
+
+  /* --- Sidebar: links slide their icon and grow a left rail --------------- */
+  :where(.sidebar-link) {
+    transition:
+      background-color var(--ds-dur-fast) linear,
+      color var(--ds-dur-fast) linear,
+      padding-left var(--ds-dur-base) var(--ds-ease-expo);
+  }
+  :where(.sidebar-link) > :where(svg:first-child) {
+    transition: transform var(--ds-dur-base) var(--ds-ease-spring);
+  }
+  @media (hover: hover) and (pointer: fine) {
+    :where(.sidebar-link):hover > :where(svg:first-child) {
+      transform: scale(1.08) rotate(-4deg);
+    }
+  }
+  /* The active rail grows from the middle rather than popping into place. */
+  :where(.sidebar-link-active)::before {
+    animation: moRail var(--ds-dur-slow) var(--ds-ease-spring) both;
+  }
+
+  /* --- Cards: a sheen crosses the surface once on entry ------------------- */
+  :where(.card, .stat-card) {
+    position: relative;
+    overflow: hidden;
+  }
+  :where(.card, .stat-card)::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    background: linear-gradient(
+      105deg,
+      transparent 38%,
+      color-mix(in srgb, var(--ds-surface) 55%, transparent) 50%,
+      transparent 62%
+    );
+    transform: translateX(-120%);
+    animation: moCardSheen var(--ds-dur-slower) var(--ds-ease-expo) 240ms both;
+  }
+
+  /* --- Stat numerals: settle in with a small overshoot ------------------- */
+  :where(.stat-value, .signal-value) {
+    animation: moPop var(--ds-dur-slow) var(--ds-ease-spring) both;
+  }
+
+  /* --- Table header: sticks in with a wipe ------------------------------- */
+  :where(.table) thead th {
+    animation: moHeaderWipe var(--ds-dur-slow) var(--ds-ease-expo) both;
+  }
+
+  /* --- Filter chips / segmented controls -------------------------------- */
+  :where(.badge, .provider-chip, .plaza-seg-item) {
+    transition:
+      transform var(--ds-dur-fast) var(--ds-ease-spring),
+      background-color var(--ds-dur-fast) linear,
+      color var(--ds-dur-fast) linear,
+      border-color var(--ds-dur-fast) linear,
+      box-shadow var(--ds-dur-base) var(--ds-ease-expo);
+  }
+  @media (hover: hover) and (pointer: fine) {
+    :where(.badge, .provider-chip, .plaza-seg-item):hover {
+      transform: translateY(-1px);
+      box-shadow: var(--ds-shadow-sm);
+    }
+  }
+
+  /* --- Form controls: focus lifts the field a hair ----------------------- */
+  :where(.input, .select-trigger) {
+    transition:
+      border-color var(--ds-dur-fast) linear,
+      box-shadow var(--ds-dur-base) var(--ds-ease-expo),
+      transform var(--ds-dur-instant) var(--ds-ease-out);
+  }
+  :where(.input):focus,
+  :where(.select-trigger-open) {
+    transform: translateY(-1px);
+  }
+
+  /* --- Dropdown items: the highlight slides in from the left ------------- */
+  :where(.dropdown-item) {
+    position: relative;
+    transition:
+      background-color var(--ds-dur-fast) linear,
+      padding-left var(--ds-dur-fast) var(--ds-ease-expo),
+      color var(--ds-dur-fast) linear;
+  }
+  :where(.dropdown-item)::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 15%;
+    bottom: 15%;
+    width: 2px;
+    border-radius: 0 2px 2px 0;
+    background: var(--ds-primary);
+    transform: scaleY(0);
+    transform-origin: center;
+    transition: transform var(--ds-dur-fast) var(--ds-ease-spring);
+  }
+  :where(.dropdown-item):hover::before {
+    transform: scaleY(1);
+  }
+
+  /* --- Pagination / icon-only controls ---------------------------------- */
+  :where(.pagination) :where(button) {
+    transition:
+      transform var(--ds-dur-instant) var(--ds-ease-out),
+      background-color var(--ds-dur-fast) linear,
+      color var(--ds-dur-fast) linear;
+  }
+  :where(.pagination) :where(button):active:not(:disabled) {
+    transform: scale(0.92);
+  }
+
+  /* --- Announcement bell: one-time swing when unread ---------------------- */
+  :where(.announcement-bell-unread) {
+    animation: moBellSwing var(--ds-dur-slower) var(--ds-ease-spring) 2;
+    transform-origin: 50% 10%;
+  }
+
+  /* --- Skeletons shimmer instead of sitting flat ------------------------- */
+  :where(.skeleton, .animate-pulse) {
+    background-image: linear-gradient(
+      100deg,
+      transparent 22%,
+      color-mix(in srgb, var(--ds-surface) 62%, transparent) 50%,
+      transparent 78%
+    );
+    background-size: 220% 100%;
+    background-repeat: no-repeat;
+    animation: moSweep 1.6s linear infinite;
+  }
+}
+
+@keyframes moModalPop {
+  0% {
+    opacity: 0;
+    transform: scale(0.93) translateY(18px);
+  }
+  60% {
+    transform: scale(1.008) translateY(0);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Batch B keyframes -------------------------------------------------------- */
+
+/* Sidebar active rail grows vertically from the centre. */
+@keyframes moRail {
+  from { transform: translateY(-50%) scaleY(0); }
+  to { transform: translateY(-50%) scaleY(1); }
+}
+
+/* A single specular pass across a card as it appears. */
+@keyframes moCardSheen {
+  from { transform: translateX(-120%); }
+  to { transform: translateX(120%); }
+}
+
+/* Table header wipes in from the left, so a dense table reads top-down. */
+@keyframes moHeaderWipe {
+  from {
+    opacity: 0;
+    clip-path: inset(0 100% 0 0);
+  }
+  to {
+    opacity: 1;
+    clip-path: inset(0 0 0 0);
+  }
+}
+
+/* Unread bell: two quick swings, then rest. */
+@keyframes moBellSwing {
+  0%, 100% { transform: rotate(0deg); }
+  20% { transform: rotate(13deg); }
+  40% { transform: rotate(-10deg); }
+  60% { transform: rotate(6deg); }
+  80% { transform: rotate(-3deg); }
+}
+
+/* ============================================================================
+   10. Reduced motion — mandatory kill switch
+   ----------------------------------------------------------------------------
+   Everything above collapses to its end state. Transforms are removed rather
+   than zeroed so nothing shifts position mid-transition, and infinite ambient
+   loops stop entirely (they are the most nauseating category).
+   ========================================================================== */
+@media (prefers-reduced-motion: reduce) {
+  .mo-rise,
+  .mo-pop,
+  .mo-slide-left,
+  .mo-drop-in,
+  .mo-toast-in,
+  .mo-drawer-in,
+  .mo-flash-up,
+  .mo-flash-down,
+  .mo-ring-once,
+  .mo-stagger > *,
+  .mo-stagger-rows tbody tr,
+  :where(.signal-main) > *,
+  :where(.table) tbody tr,
+  :where(.plaza-pricing-table) tbody tr,
+  :where(.dropdown),
+  :where(.modal-content),
+  :where(.dialog-container),
+  :where(.toast),
+  :where(.empty-state-icon),
+  :where(.status-dot),
+  :where(.live-status) > span:first-child,
+  :where(.sidebar-link-active)::before,
+  :where(.card, .stat-card)::after,
+  :where(.stat-value, .signal-value),
+  :where(.table) thead th,
+  :where(.announcement-bell-unread),
+  :where(.skeleton, .animate-pulse) {
+    animation: none !important;
+  }
+
+  .mo-live,
+  .mo-drift,
+  .mo-text-flow,
+  .mo-stripes,
+  .mo-skeleton,
+  .mo-orbit,
+  :where(.progress-bar) {
+    animation: none !important;
+  }
+
+  .mo-page-enter-active,
+  .mo-page-leave-active,
+  .mo-modal-enter-active .mo-modal-panel,
+  .mo-modal-leave-active .mo-modal-panel,
+  .mo-lift,
+  .mo-sheen::after,
+  .mo-underline::after,
+  .mo-nudge,
+  .mo-indicator::before,
+  :where(.card, .stat-card, .feature-card-v2, .step-card, .plaza-group),
+  :where(.table) tbody tr,
+  :where(.plaza-pricing-table) tbody tr,
+  :where(.btn, .primary-action, .header-action, .icon-button, .copy-button),
+  :where(.tab)::after,
+  :where(.sidebar-link),
+  :where(.sidebar-link) > :where(svg:first-child),
+  :where(.badge, .provider-chip, .plaza-seg-item),
+  :where(.input, .select-trigger),
+  :where(.dropdown-item),
+  :where(.dropdown-item)::before,
+  :where(.pagination) :where(button) {
+    transition-duration: 1ms !important;
+    transition-delay: 0ms !important;
+  }
+
+  .mo-page-enter-from,
+  .mo-page-leave-to,
+  .mo-modal-enter-from .mo-modal-panel,
+  .mo-modal-leave-to .mo-modal-panel {
+    transform: none !important;
+    filter: none !important;
+  }
+
+  .mo-lift:hover,
+  .mo-press:active,
+  .mo-nudge:hover,
+  :where(.btn, .primary-action, .header-action, .icon-button):active:not(:disabled) {
+    transform: none !important;
+  }
+
+  :where(.sidebar-link):hover > :where(svg:first-child),
+  :where(.badge, .provider-chip, .plaza-seg-item):hover,
+  :where(.input):focus,
+  :where(.select-trigger-open),
+  :where(.pagination) :where(button):active:not(:disabled) {
+    transform: none !important;
+  }
+}
+
+/* In-product switch, layered on top of the OS preference. */
+html[data-motion="off"] .mo-rise,
+html[data-motion="off"] .mo-pop,
+html[data-motion="off"] .mo-slide-left,
+html[data-motion="off"] .mo-drop-in,
+html[data-motion="off"] .mo-toast-in,
+html[data-motion="off"] .mo-drawer-in,
+html[data-motion="off"] .mo-stagger > *,
+html[data-motion="off"] .mo-stagger-rows tbody tr,
+html[data-motion="off"] .mo-live,
+html[data-motion="off"] .mo-drift,
+html[data-motion="off"] .mo-text-flow,
+html[data-motion="off"] .mo-stripes,
+html[data-motion="off"] .mo-skeleton,
+html[data-motion="off"] .mo-orbit,
+html[data-motion="off"] :where(.signal-main) > *,
+html[data-motion="off"] :where(.table) tbody tr,
+html[data-motion="off"] :where(.plaza-pricing-table) tbody tr,
+html[data-motion="off"] :where(.dropdown),
+html[data-motion="off"] :where(.modal-content),
+html[data-motion="off"] :where(.dialog-container),
+html[data-motion="off"] :where(.toast),
+html[data-motion="off"] :where(.empty-state-icon),
+html[data-motion="off"] :where(.status-dot),
+html[data-motion="off"] :where(.live-status) > span:first-child,
+html[data-motion="off"] :where(.progress-bar),
+html[data-motion="off"] :where(.sidebar-link-active)::before,
+html[data-motion="off"] :where(.card, .stat-card)::after,
+html[data-motion="off"] :where(.stat-value, .signal-value),
+html[data-motion="off"] :where(.table) thead th,
+html[data-motion="off"] :where(.announcement-bell-unread),
+html[data-motion="off"] :where(.skeleton, .animate-pulse) {
+  animation: none !important;
+}
+html[data-motion="off"] .mo-lift:hover,
+html[data-motion="off"] .mo-press:active,
+html[data-motion="off"] .mo-nudge:hover,
+html[data-motion="off"] :where(.btn, .primary-action, .header-action, .icon-button):active:not(:disabled),
+html[data-motion="off"] :where(.sidebar-link):hover > :where(svg:first-child),
+html[data-motion="off"] :where(.badge, .provider-chip, .plaza-seg-item):hover,
+html[data-motion="off"] :where(.input):focus,
+html[data-motion="off"] :where(.select-trigger-open),
+html[data-motion="off"] :where(.pagination) :where(button):active:not(:disabled) {
+  transform: none !important;
+}

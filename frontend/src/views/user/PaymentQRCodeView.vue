@@ -1,0 +1,362 @@
+<template>
+  <AppLayout>
+    <div class="signal-payment-qr">
+      <header class="signal-payment-qr__heading">
+        <p aria-hidden="true">PAYMENT / LIVE</p>
+        <h1>{{ qrUrl ? scanTitle : t('payment.qr.payInNewWindow') }}</h1>
+      </header>
+      <section class="signal-payment-qr__panel">
+        <div v-if="qrUrl" class="signal-payment-qr__code">
+          <canvas ref="qrCanvas"></canvas>
+        </div>
+        <!-- Scan prompt for QR code -->
+        <p v-if="qrUrl && !expired && scanHint" class="signal-payment-qr__hint">
+          {{ scanHint }}
+        </p>
+        <div v-if="expired" class="signal-payment-qr__status signal-payment-qr__status--expired">
+          <Icon name="exclamationCircle" size="lg" />
+          <p>{{ t('payment.qr.expired') }}</p>
+          <button class="btn btn-primary" @click="router.push('/purchase')">{{ t('payment.result.backToRecharge') }}</button>
+        </div>
+        <div v-else class="signal-payment-qr__status">
+          <span>{{ qrUrl ? t('payment.qr.expiresIn') : t('payment.qr.payInNewWindowHint') }}</span>
+          <strong>{{ countdownDisplay }}</strong>
+          <p>{{ t('payment.qr.waitingPayment') }}</p>
+        </div>
+        <div v-if="!expired" class="signal-payment-qr__actions">
+          <a v-if="payUrl && !qrUrl" :href="payUrl" target="_blank" rel="noopener noreferrer"
+            class="btn btn-primary">
+            <Icon name="externalLink" size="sm" />
+            {{ t('payment.qr.openPayWindow') }}
+          </a>
+          <!-- Cancel button -->
+          <button v-if="orderId" class="btn btn-secondary" :disabled="cancelling" @click="handleCancel">
+            {{ cancelling ? t('common.processing') : t('payment.qr.cancelOrder') }}
+          </button>
+        </div>
+      </section>
+    </div>
+  </AppLayout>
+</template>
+
+<script setup lang="ts">
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { useI18n } from 'vue-i18n'
+import { useRoute, useRouter } from 'vue-router'
+import AppLayout from '@/components/layout/AppLayout.vue'
+import { usePaymentStore } from '@/stores/payment'
+import { paymentAPI } from '@/api/payment'
+import { extractI18nErrorMessage } from '@/utils/apiError'
+import { useAppStore } from '@/stores'
+import { isBuiltInAlipayMethod, isBuiltInWxpayMethod } from '@/components/payment/providerConfig'
+import QRCode from 'qrcode'
+import alipayIcon from '@/assets/icons/alipay.svg'
+import wxpayIcon from '@/assets/icons/wxpay.svg'
+import Icon from '@/components/icons/Icon.vue'
+
+const { t } = useI18n()
+const route = useRoute()
+const router = useRouter()
+const paymentStore = usePaymentStore()
+const appStore = useAppStore()
+
+const qrCanvas = ref<HTMLCanvasElement | null>(null)
+const qrUrl = ref('')
+const payUrl = ref('')
+const orderId = ref(0)
+const remainingSeconds = ref(0)
+const expired = ref(false)
+const cancelling = ref(false)
+const paymentType = ref('')
+
+let pollTimer: ReturnType<typeof setInterval> | null = null
+let countdownTimer: ReturnType<typeof setInterval> | null = null
+
+const countdownDisplay = computed(() => {
+  const m = Math.floor(remainingSeconds.value / 60)
+  const s = remainingSeconds.value % 60
+  return m.toString().padStart(2, '0') + ':' + s.toString().padStart(2, '0')
+})
+
+const isAlipay = computed(() => isBuiltInAlipayMethod(paymentType.value))
+const isWxpay = computed(() => isBuiltInWxpayMethod(paymentType.value))
+
+const scanTitle = computed(() => {
+  if (isAlipay.value) return t('payment.qr.scanAlipay')
+  if (isWxpay.value) return t('payment.qr.scanWxpay')
+  return t('payment.qr.scanToPay')
+})
+
+const scanHint = computed(() => {
+  if (isAlipay.value) return t('payment.qr.scanAlipayHint')
+  if (isWxpay.value) return t('payment.qr.scanWxpayHint')
+  return ''
+})
+
+function getLogoForType(): string | null {
+  if (isAlipay.value) return alipayIcon
+  if (isWxpay.value) return wxpayIcon
+  return null
+}
+
+async function renderQR() {
+  await nextTick()
+  if (!qrCanvas.value || !qrUrl.value) return
+
+  // Use medium error correction to support logo overlay while keeping QR code scannable
+  const logoSrc = getLogoForType()
+  await QRCode.toCanvas(qrCanvas.value, qrUrl.value, {
+    width: 256,
+    margin: 2,
+    errorCorrectionLevel: logoSrc ? 'M' : 'L',
+  })
+
+  if (!logoSrc) return
+
+  // Draw logo in center of QR code
+  const canvas = qrCanvas.value
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return
+
+  const img = new Image()
+  img.src = logoSrc
+  img.onload = () => {
+    const logoSize = 48
+    const x = (canvas.width - logoSize) / 2
+    const y = (canvas.height - logoSize) / 2
+    // White background with rounded corners
+    const pad = 5
+    ctx.fillStyle = '#FFFFFF'
+    ctx.beginPath()
+    const r = 6
+    ctx.moveTo(x - pad + r, y - pad)
+    ctx.arcTo(x + logoSize + pad, y - pad, x + logoSize + pad, y + logoSize + pad, r)
+    ctx.arcTo(x + logoSize + pad, y + logoSize + pad, x - pad, y + logoSize + pad, r)
+    ctx.arcTo(x - pad, y + logoSize + pad, x - pad, y - pad, r)
+    ctx.arcTo(x - pad, y - pad, x + logoSize + pad, y - pad, r)
+    ctx.fill()
+    // Draw logo
+    ctx.drawImage(img, x, y, logoSize, logoSize)
+  }
+}
+
+let pollInFlight = false
+async function pollStatus() {
+  if (!orderId.value) return
+  // 防重入：接口响应慢于 3 秒轮询间隔时避免并发重叠请求与重复跳转。
+  if (pollInFlight) return
+  pollInFlight = true
+  try {
+    const order = await paymentStore.pollOrderStatus(orderId.value)
+    if (!order) return
+    // 定时器已被 cleanup 清除时不再执行终态跳转（响应可能在 cleanup 后才回来）。
+    if (!pollTimer) return
+    if (order.status === 'COMPLETED' || order.status === 'PAID') {
+      cleanup()
+      router.push({ path: '/payment/result', query: { order_id: String(orderId.value), status: 'success' } })
+    } else if (order.status === 'EXPIRED' || order.status === 'CANCELLED' || order.status === 'FAILED') {
+      cleanup()
+      expired.value = true
+    }
+  } finally {
+    pollInFlight = false
+  }
+}
+
+function startCountdown(seconds: number) {
+  remainingSeconds.value = Math.max(0, seconds)
+  if (remainingSeconds.value <= 0) {
+    expired.value = true
+    return
+  }
+  countdownTimer = setInterval(() => {
+    remainingSeconds.value--
+    if (remainingSeconds.value <= 0) {
+      expired.value = true
+      cleanup()
+    }
+  }, 1000)
+}
+
+async function handleCancel() {
+  if (!orderId.value || cancelling.value) return
+  cancelling.value = true
+  try {
+    await paymentAPI.cancelOrder(orderId.value)
+    cleanup()
+    router.push('/purchase')
+  } catch (err: unknown) {
+    appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error')))
+  } finally {
+    cancelling.value = false
+  }
+}
+
+function cleanup() {
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
+  if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null }
+}
+
+watch(qrUrl, () => renderQR())
+
+onMounted(() => {
+  orderId.value = Number(route.query.order_id) || 0
+  qrUrl.value = String(route.query.qr || '')
+  payUrl.value = String(route.query.pay_url || '')
+  paymentType.value = String(route.query.payment_type || '')
+
+  // Calculate countdown from expiresAt
+  const expiresAtStr = String(route.query.expires_at || '')
+  let seconds = 30 * 60 // fallback: 30 minutes
+  if (expiresAtStr) {
+    const expiresAt = new Date(expiresAtStr)
+    const now = new Date()
+    seconds = Math.floor((expiresAt.getTime() - now.getTime()) / 1000)
+  }
+  startCountdown(seconds)
+  pollTimer = setInterval(pollStatus, 3000)
+  renderQR()
+})
+
+onUnmounted(() => cleanup())
+</script>
+
+<style scoped>
+.signal-payment-qr {
+  --qr-bg: var(--signal-bg, #f5f6f5);
+  --qr-surface: var(--signal-surface, #ffffff);
+  --qr-line: var(--signal-line, #dce2df);
+  --qr-text: var(--signal-text, #202423);
+  --qr-muted: var(--signal-muted, #65716a);
+  --qr-accent: var(--signal-accent, #087f68);
+  --qr-amber: var(--signal-amber, #a86610);
+  display: grid;
+  width: min(100%, 480px);
+  gap: 14px;
+  margin-inline: auto;
+  padding-block: 24px;
+  color: var(--qr-text);
+  letter-spacing: 0;
+}
+
+.signal-payment-qr__heading {
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--qr-line);
+  text-align: left;
+}
+
+.signal-payment-qr__heading p {
+  margin: 0 0 3px;
+  color: var(--qr-muted);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.signal-payment-qr__heading h1 {
+  margin: 0;
+  color: var(--qr-text);
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.signal-payment-qr__panel {
+  display: grid;
+  gap: 16px;
+  padding: 20px;
+  border: 1px solid var(--qr-line);
+  border-radius: 8px;
+  background: var(--qr-surface);
+}
+
+.signal-payment-qr__code {
+  display: grid;
+  place-items: center;
+  width: fit-content;
+  max-width: 100%;
+  margin-inline: auto;
+  padding: 12px;
+  border: 1px solid var(--qr-line);
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.signal-payment-qr__code canvas {
+  display: block;
+  max-width: 100%;
+  height: auto !important;
+}
+
+.signal-payment-qr__hint {
+  margin: 0;
+  color: var(--qr-muted);
+  font-size: 13px;
+  line-height: 1.55;
+  text-align: center;
+}
+
+.signal-payment-qr__status {
+  display: grid;
+  gap: 4px;
+  padding: 14px 0;
+  border-block: 1px solid var(--qr-line);
+  text-align: center;
+}
+
+.signal-payment-qr__status span,
+.signal-payment-qr__status p {
+  margin: 0;
+  color: var(--qr-muted);
+  font-size: 12px;
+}
+
+.signal-payment-qr__status strong {
+  color: var(--qr-text);
+  font-size: 30px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+
+.signal-payment-qr__status--expired {
+  place-items: center;
+  color: var(--qr-amber);
+}
+
+.signal-payment-qr__status--expired p {
+  color: var(--qr-amber);
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.signal-payment-qr__status--expired .btn {
+  margin-top: 8px;
+}
+
+.signal-payment-qr__actions {
+  display: grid;
+  gap: 8px;
+}
+
+.signal-payment-qr__actions .btn {
+  display: inline-flex;
+  width: 100%;
+  min-height: 42px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+}
+
+@media (max-width: 374px) {
+  .signal-payment-qr {
+    padding-block: 10px;
+  }
+
+  .signal-payment-qr__panel {
+    padding: 14px;
+  }
+
+  .signal-payment-qr__code {
+    padding: 8px;
+  }
+}
+</style>

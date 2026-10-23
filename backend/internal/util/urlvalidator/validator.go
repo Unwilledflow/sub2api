@@ -1,0 +1,239 @@
+package urlvalidator
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net"
+	"net/netip"
+	"net/url"
+	"strconv"
+	"strings"
+	"time"
+)
+
+type ValidationOptions struct {
+	AllowedHosts     []string
+	RequireAllowlist bool
+	AllowPrivate     bool
+}
+
+// ValidateHTTPURL validates an outbound HTTP/HTTPS URL.
+//
+// It provides a single validation entry point that supports:
+// - scheme 校验（https 或可选允许 http）
+// - 可选 allowlist（支持 *.example.com 通配）
+// - allow_private_hosts 策略（阻断 localhost/私网字面量 IP）
+//
+// 注意：DNS Rebinding 防护（解析后 IP 校验）应在实际发起请求时执行，避免 TOCTOU。
+func ValidateHTTPURL(raw string, allowInsecureHTTP bool, opts ValidationOptions) (string, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", errors.New("url is required")
+	}
+
+	parsed, err := url.Parse(trimmed)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return "", fmt.Errorf("invalid url: %s", trimmed)
+	}
+
+	scheme := strings.ToLower(parsed.Scheme)
+	if scheme != "https" && (!allowInsecureHTTP || scheme != "http") {
+		return "", fmt.Errorf("invalid url scheme: %s", parsed.Scheme)
+	}
+
+	host := strings.ToLower(strings.TrimSpace(parsed.Hostname()))
+	if host == "" {
+		return "", errors.New("invalid host")
+	}
+	if !opts.AllowPrivate && isBlockedHost(host) {
+		return "", fmt.Errorf("host is not allowed: %s", host)
+	}
+
+	if port := parsed.Port(); port != "" {
+		num, err := strconv.Atoi(port)
+		if err != nil || num <= 0 || num > 65535 {
+			return "", fmt.Errorf("invalid port: %s", port)
+		}
+	}
+
+	allowlist := normalizeAllowlist(opts.AllowedHosts)
+	if opts.RequireAllowlist && len(allowlist) == 0 {
+		return "", errors.New("allowlist is not configured")
+	}
+	if len(allowlist) > 0 && !isAllowedHost(host, allowlist) {
+		return "", fmt.Errorf("host is not allowed: %s", host)
+	}
+
+	parsed.Path = strings.TrimRight(parsed.Path, "/")
+	parsed.RawPath = ""
+	return strings.TrimRight(parsed.String(), "/"), nil
+}
+
+func ValidateURLFormat(raw string, allowInsecureHTTP bool) (string, error) {
+	// 最小格式校验：仅保证 URL 可解析且 scheme 合规，不做白名单/私网/SSRF 校验
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", errors.New("url is required")
+	}
+
+	parsed, err := url.Parse(trimmed)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return "", fmt.Errorf("invalid url: %s", trimmed)
+	}
+
+	scheme := strings.ToLower(parsed.Scheme)
+	if scheme != "https" && (!allowInsecureHTTP || scheme != "http") {
+		return "", fmt.Errorf("invalid url scheme: %s", parsed.Scheme)
+	}
+
+	host := strings.TrimSpace(parsed.Hostname())
+	if host == "" {
+		return "", errors.New("invalid host")
+	}
+
+	if port := parsed.Port(); port != "" {
+		num, err := strconv.Atoi(port)
+		if err != nil || num <= 0 || num > 65535 {
+			return "", fmt.Errorf("invalid port: %s", port)
+		}
+	}
+
+	return strings.TrimRight(trimmed, "/"), nil
+}
+
+func ValidateHTTPSURL(raw string, opts ValidationOptions) (string, error) {
+	return ValidateHTTPURL(raw, false, opts)
+}
+
+// blockedResolvedPrefixes 是「解析后 IP」的封禁清单，全仓唯一来源。
+//
+// 为什么不能只用标准库的 IsLoopback/IsPrivate/IsLinkLocal*：那些覆盖不到
+// CGNAT（100.64.0.0/10，云厂商元数据服务常驻其中，如 100.100.100.200）、
+// benchmarking（198.18.0.0/15）、保留段（240.0.0.0/4）、组播（224.0.0.0/4，
+// 标准库只覆盖链路本地组播 224.0.0.0/24）、以及若干文档/过渡段。
+//
+// 该清单原先在 service/custom_usage_http.go 单独维护了一份「完整版」，
+// 两份口径不一致本身就是风险；这里合并为唯一来源，两边共用。
+var blockedResolvedPrefixes = func() []netip.Prefix {
+	ranges := []string{
+		"0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8",
+		"168.63.129.16/32", "169.254.0.0/16", "172.16.0.0/12",
+		"192.0.0.0/24", "192.0.2.0/24", "192.88.99.0/24", "192.168.0.0/16",
+		"198.18.0.0/15", "198.51.100.0/24", "203.0.113.0/24",
+		"224.0.0.0/4", "240.0.0.0/4",
+		"2001::/23", "2001:db8::/32", "2002::/16", "3fff::/20",
+	}
+	out := make([]netip.Prefix, 0, len(ranges))
+	for _, r := range ranges {
+		out = append(out, netip.MustParsePrefix(r))
+	}
+	return out
+}()
+
+var globalUnicastV6Prefix = netip.MustParsePrefix("2000::/3")
+
+// IsPublicResolvedIP 判断一个解析后的 IP 是否属于可以安全出站的公网地址。
+//
+// 返回 false 的包括：无效地址、带 zone 的地址、回环、私网、链路本地、
+// 组播、未指定地址、非 2000::/3 的 IPv6，以及 blockedResolvedPrefixes 中的任何段。
+func IsPublicResolvedIP(ip netip.Addr) bool {
+	if !ip.IsValid() || ip.Zone() != "" {
+		return false
+	}
+	ip = ip.Unmap()
+	if !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLoopback() ||
+		ip.IsLinkLocalUnicast() || ip.IsMulticast() || ip.IsUnspecified() {
+		return false
+	}
+	if ip.Is6() && !globalUnicastV6Prefix.Contains(ip) {
+		return false
+	}
+	for _, p := range blockedResolvedPrefixes {
+		if p.Contains(ip) {
+			return false
+		}
+	}
+	return true
+}
+
+// IsPublicNetIP 是 IsPublicResolvedIP 的 net.IP 版本。
+func IsPublicNetIP(ip net.IP) bool {
+	addr, ok := netip.AddrFromSlice(ip)
+	if !ok {
+		return false
+	}
+	return IsPublicResolvedIP(addr)
+}
+
+// ValidateResolvedIP 验证 DNS 解析后的 IP 地址是否安全
+// 用于防止 DNS Rebinding 攻击：在实际 HTTP 请求时调用此函数验证解析后的 IP
+func ValidateResolvedIP(host string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
+	if err != nil {
+		return fmt.Errorf("dns resolution failed: %w", err)
+	}
+
+	for _, ip := range ips {
+		if !IsPublicNetIP(ip) {
+			return fmt.Errorf("resolved ip %s is not allowed", ip.String())
+		}
+	}
+	return nil
+}
+
+func normalizeAllowlist(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	normalized := make([]string, 0, len(values))
+	for _, v := range values {
+		entry := strings.ToLower(strings.TrimSpace(v))
+		if entry == "" {
+			continue
+		}
+		if host, _, err := net.SplitHostPort(entry); err == nil {
+			entry = host
+		}
+		normalized = append(normalized, entry)
+	}
+	return normalized
+}
+
+func isAllowedHost(host string, allowlist []string) bool {
+	for _, entry := range allowlist {
+		if entry == "" {
+			continue
+		}
+		if strings.HasPrefix(entry, "*.") {
+			suffix := strings.TrimPrefix(entry, "*.")
+			if host == suffix || strings.HasSuffix(host, "."+suffix) {
+				return true
+			}
+			continue
+		}
+		if host == entry {
+			return true
+		}
+	}
+	return false
+}
+
+func IsBlockedHost(host string) bool {
+	return isBlockedHost(strings.ToLower(strings.TrimSpace(host)))
+}
+
+func isBlockedHost(host string) bool {
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
+			return true
+		}
+	}
+	return false
+}

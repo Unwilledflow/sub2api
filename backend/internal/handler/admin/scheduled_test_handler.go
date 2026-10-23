@@ -1,0 +1,284 @@
+package admin
+
+import (
+	"net/http"
+	"strconv"
+
+	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
+	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
+	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/gin-gonic/gin"
+)
+
+// ScheduledTestHandler handles admin scheduled-test-plan management.
+type ScheduledTestHandler struct {
+	scheduledTestSvc *service.ScheduledTestService
+	adminSvc         service.AdminService
+}
+
+// NewScheduledTestHandler creates a new ScheduledTestHandler.
+func NewScheduledTestHandler(scheduledTestSvc *service.ScheduledTestService, adminSvc service.AdminService) *ScheduledTestHandler {
+	return &ScheduledTestHandler{scheduledTestSvc: scheduledTestSvc, adminSvc: adminSvc}
+}
+
+func (h *ScheduledTestHandler) authorizeAccount(c *gin.Context, id int64) bool {
+	subject, ok := middleware.GetAuthSubjectFromContext(c)
+	if !ok || subject.UserID <= 0 || h.adminSvc == nil {
+		response.Forbidden(c, "administrator account access required")
+		return false
+	}
+	ctx := service.EnsureAccountOwnerScope(c.Request.Context(), subject.UserID)
+	if _, err := h.adminSvc.GetAccount(ctx, id); err != nil {
+		response.NotFound(c, "account not found")
+		return false
+	}
+	c.Request = c.Request.WithContext(ctx)
+	return true
+}
+
+type createScheduledTestPlanRequest struct {
+	AccountID           int64                   `json:"account_id" binding:"required"`
+	ModelID             string                  `json:"model_id"`
+	PromptText          string                  `json:"prompt_text"`
+	CronExpression      string                  `json:"cron_expression" binding:"required"`
+	Enabled             *bool                   `json:"enabled"`
+	MaxResults          int                     `json:"max_results"`
+	AutoRecover         *bool                   `json:"auto_recover"`
+	QualityCheckEnabled *bool                   `json:"quality_check_enabled"`
+	QualityProvider     string                  `json:"quality_provider"`
+	QualityConfig       *service.ChanshuiConfig `json:"quality_config"`
+}
+
+type updateScheduledTestPlanRequest struct {
+	ModelID             string                  `json:"model_id"`
+	PromptText          *string                 `json:"prompt_text"`
+	CronExpression      *string                 `json:"cron_expression"`
+	Enabled             *bool                   `json:"enabled"`
+	MaxResults          *int                    `json:"max_results"`
+	AutoRecover         *bool                   `json:"auto_recover"`
+	QualityCheckEnabled *bool                   `json:"quality_check_enabled"`
+	QualityProvider     *string                 `json:"quality_provider"`
+	QualityConfig       *service.ChanshuiConfig `json:"quality_config"`
+}
+
+// ListByAccount GET /admin/accounts/:id/scheduled-test-plans
+func (h *ScheduledTestHandler) ListByAccount(c *gin.Context) {
+	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		response.BadRequest(c, "invalid account id")
+		return
+	}
+
+	if !h.authorizeAccount(c, accountID) {
+		return
+	}
+	plans, err := h.scheduledTestSvc.ListPlansByAccount(c.Request.Context(), accountID)
+	if err != nil {
+		response.InternalError(c, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, plans)
+}
+
+// Create POST /admin/scheduled-test-plans
+func (h *ScheduledTestHandler) Create(c *gin.Context) {
+	var req createScheduledTestPlanRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+
+	if !h.authorizeAccount(c, req.AccountID) {
+		return
+	}
+	plan := &service.ScheduledTestPlan{
+		AccountID:      req.AccountID,
+		ModelID:        req.ModelID,
+		PromptText:     req.PromptText,
+		CronExpression: req.CronExpression,
+		Enabled:        true,
+		MaxResults:     req.MaxResults,
+	}
+	if req.Enabled != nil {
+		plan.Enabled = *req.Enabled
+	}
+	if req.AutoRecover != nil {
+		plan.AutoRecover = *req.AutoRecover
+	}
+	if req.QualityCheckEnabled != nil {
+		plan.QualityCheckEnabled = *req.QualityCheckEnabled
+	}
+	plan.QualityProvider = req.QualityProvider
+	if req.QualityConfig != nil {
+		plan.QualityConfig = *req.QualityConfig
+	}
+
+	created, err := h.scheduledTestSvc.CreatePlan(c.Request.Context(), plan)
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, created)
+}
+
+// Update PUT /admin/scheduled-test-plans/:id
+func (h *ScheduledTestHandler) Update(c *gin.Context) {
+	planID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		response.BadRequest(c, "invalid plan id")
+		return
+	}
+
+	existing, err := h.scheduledTestSvc.GetPlan(c.Request.Context(), planID)
+	if err != nil {
+		response.NotFound(c, "plan not found")
+		return
+	}
+
+	var req updateScheduledTestPlanRequest
+	if !h.authorizeAccount(c, existing.AccountID) {
+		return
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+
+	if req.ModelID != "" {
+		existing.ModelID = req.ModelID
+	}
+	if req.PromptText != nil {
+		existing.PromptText = *req.PromptText
+	}
+	if req.CronExpression != nil {
+		existing.CronExpression = *req.CronExpression
+	}
+	if req.Enabled != nil {
+		existing.Enabled = *req.Enabled
+	}
+	if req.MaxResults != nil {
+		existing.MaxResults = *req.MaxResults
+	}
+	if req.AutoRecover != nil {
+		existing.AutoRecover = *req.AutoRecover
+	}
+	if req.QualityCheckEnabled != nil {
+		existing.QualityCheckEnabled = *req.QualityCheckEnabled
+	}
+	if req.QualityProvider != nil {
+		existing.QualityProvider = *req.QualityProvider
+	}
+	if req.QualityConfig != nil {
+		existing.QualityConfig = *req.QualityConfig
+	}
+
+	updated, err := h.scheduledTestSvc.UpdatePlan(c.Request.Context(), existing)
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, updated)
+}
+
+// Delete DELETE /admin/scheduled-test-plans/:id
+func (h *ScheduledTestHandler) Delete(c *gin.Context) {
+	planID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		response.BadRequest(c, "invalid plan id")
+		return
+	}
+
+	existing, err := h.scheduledTestSvc.GetPlan(c.Request.Context(), planID)
+	if err != nil {
+		response.NotFound(c, "plan not found")
+		return
+	}
+	if !h.authorizeAccount(c, existing.AccountID) {
+		return
+	}
+	if err := h.scheduledTestSvc.DeletePlan(c.Request.Context(), planID); err != nil {
+		response.InternalError(c, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "deleted"})
+}
+
+// ListResults GET /admin/scheduled-test-plans/:id/results
+func (h *ScheduledTestHandler) ListResults(c *gin.Context) {
+	planID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		response.BadRequest(c, "invalid plan id")
+		return
+	}
+
+	existing, err := h.scheduledTestSvc.GetPlan(c.Request.Context(), planID)
+	if err != nil {
+		response.NotFound(c, "plan not found")
+		return
+	}
+	if !h.authorizeAccount(c, existing.AccountID) {
+		return
+	}
+	limit := 50
+	if l, err := strconv.Atoi(c.Query("limit")); err == nil && l > 0 {
+		limit = l
+	}
+
+	afterID := int64(0)
+	if raw := c.Query("after_id"); raw != "" {
+		afterID, err = strconv.ParseInt(raw, 10, 64)
+		if err != nil || afterID < 0 {
+			response.BadRequest(c, "invalid result cursor")
+			return
+		}
+	}
+	results, err := h.scheduledTestSvc.ListResultsAfter(c.Request.Context(), planID, limit, afterID)
+	if err != nil {
+		response.InternalError(c, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, results)
+}
+
+// ListAll GET /admin/scheduled-test-plans and /admin/account-quality-plans
+func (h *ScheduledTestHandler) ListAll(c *gin.Context) {
+	plans, err := h.scheduledTestSvc.ListAllPlans(c.Request.Context())
+	if err != nil {
+		response.InternalError(c, err.Error())
+		return
+	}
+	if plans == nil {
+		plans = []*service.ScheduledTestPlan{}
+	}
+	c.JSON(http.StatusOK, plans)
+}
+
+// TriggerNow POST /admin/scheduled-test-plans/:id/run
+func (h *ScheduledTestHandler) TriggerNow(c *gin.Context) {
+	planID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || planID <= 0 {
+		response.BadRequest(c, "invalid plan id")
+		return
+	}
+	if err := h.scheduledTestSvc.TriggerNow(c.Request.Context(), planID); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "queued"})
+}
+
+// ListAllResults GET /admin/scheduled-test-results and /admin/account-quality-results
+func (h *ScheduledTestHandler) ListAllResults(c *gin.Context) {
+	beforeID, err := strconv.ParseInt(c.DefaultQuery("before_id", "0"), 10, 64)
+	if err != nil || beforeID < 0 {
+		response.BadRequest(c, "invalid before_id")
+		return
+	}
+	page, err := h.scheduledTestSvc.ListAllResults(c.Request.Context(), beforeID)
+	if err != nil {
+		response.InternalError(c, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, page)
+}
+
