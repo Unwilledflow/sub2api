@@ -1,33 +1,27 @@
-# Sub2API（个人分支）
+# Sub2API
 
-本仓库是 [Sub2API](https://github.com/kiss-kedaya/sub2api) 的**私有二次开发分支**，不是官方仓库，不对外分发。
+AI API 网关：把订阅制账号的配额按统一的 OpenAI / Anthropic / Gemini 协议暴露给下游客户端，负责账号调度、额度计费与用量统计。
 
-上游是 AI API 网关，把订阅制账号的配额按统一的 OpenAI / Anthropic / Gemini 协议暴露给下游客户端，并负责账号调度、额度计费与用量统计。本分支在上游基础上合并生产补丁，修复实际运行中暴露的缺陷。
+本仓库为私有部署实例，不对外分发。
 
 当前版本：**2.2.19**（见 `backend/cmd/server/VERSION`）
-
-## 与上游的关系
-
-- 基线来源：上游 v2.2.16 + 本分支的生产补丁
-- 历史经过压缩重排；上游的完整合并历史保留在本地 tag `backup-full-history-20261023`，不在本仓库分支中
-- 本仓库**不跟随上游自动更新**，需要摘取上游改动时按需手动 cherry-pick
-
-## 本分支相对上游的主要修复
-
-| 修复 | 说明 |
-| --- | --- |
-| Grok 视频结算 | 兼容站返回 `status:"completed"` 而非官方 `done`，导致计费永不命中、任务无限轮询。状态解析统一为单一归一化函数，计费与轮询共用 |
-| 媒体任务上限 | 视频计费任务增加 6 小时 TTL 与次数上限；超龄先补一次结算，仍未结算则终止并释放预留额度 |
-| 流式帧聚合 | 多行 SSE 聚合护栏遇到超长非 SSE 响应时降级为原字节透传，不再把正常响应判成流错误 |
-| 会话身份推导 | 顶层 `input_text` 作为用户锚点、助手 `output_text` 排除出锚点、前缀槽位仅在无历史轮次时写入，避免每轮换账号 |
-| 邮件出站 | SMTP 私网放行改为跟随 `security.url_allowlist.allow_private_hosts`，不再写死拒绝内网邮件主机 |
-| 定时质检日志 | 未配置渲染器时只提示一次并退回本地评估，不再每次计划执行都记 ERROR |
 
 ## 技术栈
 
 - 后端：Go 1.27、Gin 1.9、ent 0.14、PostgreSQL 15+
 - 前端：Vue 3.5、TypeScript 5.6、Vite 5
 - 缓存：Redis 7+ / Valkey，亦可使用内存实现
+
+## 已修复的问题
+
+| 问题 | 处理 |
+| --- | --- |
+| Grok 视频结算永不命中 | 兼容站返回 `status:"completed"` 而非 `done`，计费侧只认 `done`，任务卡在 submitted 无限轮询、冻结用户预留额度。状态解析统一为单一归一化函数，计费与轮询共用 |
+| 媒体计费任务无上限 | 视频任务增加 6 小时 TTL 与次数上限；超龄先补一次结算，仍未结算则终止并释放预留额度 |
+| 超长响应被判成流错误 | 多行 SSE 聚合护栏遇到超长非 SSE 响应时降级为原字节透传 |
+| 会话身份每轮漂移 | 顶层 `input_text` 作为用户锚点、助手 `output_text` 排除出锚点、前缀槽位仅在无历史轮次时写入 |
+| 内网邮件发不出 | SMTP 私网放行改为跟随 `security.url_allowlist.allow_private_hosts` |
+| 定时质检刷 ERROR | 未配置渲染器时只提示一次并退回本地评估 |
 
 ## 本地开发
 
@@ -76,9 +70,4 @@ docker compose up -d
 
 ## 许可
 
-上游采用 LGPL-3.0，本分支沿用同一许可，仅用于个人部署。
-
-## 上游与致谢
-
-- 上游项目：<https://github.com/kiss-kedaya/sub2api>
-- 原始项目：<https://github.com/Wei-Shaw/sub2api>
+LGPL-3.0，详见 `LICENSE`。
