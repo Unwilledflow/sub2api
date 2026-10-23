@@ -723,21 +723,60 @@ func StableGrokVideoBillingRequestID(taskRequestID string) string {
 // Request may include resolution ("480p"|"720p"|"1080p"); completed status does not
 // document a resolution field — bill resolution from the create-time request snapshot.
 
-// IsGrokVideoStatusBillable matches official success: status == "done" AND non-empty video.url.
-// pending / expired / failed, or done without a video URL, are not billable.
-func IsGrokVideoStatusBillable(statusBody []byte) bool {
-	if len(statusBody) == 0 || !gjson.ValidBytes(statusBody) {
-		return false
+// grokVideoStatusKind 是上游视频任务状态的归一化结果。
+//
+// 官方枚举只有 pending | done | expired | failed，但兼容/中转站普遍回
+// completed / succeeded / success / finished 等别名。历史 bug 就出在这里：
+// adaptGrokVideoClientResponse 把 done 明确改写成 completed 推给客户端，说明
+// 「completed 就是成功态」是代码自己承认的语义，而计费侧的 isOfficialGrokVideoStatusDone
+// 只认 done，两处各写一份判定互相漂移 —— 中转站直接回 completed 时，计费永远
+// 看不到命中，任务卡在 submitted 按分钟轮询（实测单任务 5540 次、卡 4.5 天）。
+//
+// 因此状态解析只保留这一份实现，计费与轮询共用。
+type grokVideoStatusKind int
+
+const (
+	grokVideoStatusUnknown grokVideoStatusKind = iota
+	grokVideoStatusPending
+	grokVideoStatusDone
+	grokVideoStatusFailed
+	grokVideoStatusExpired
+)
+
+func normalizeGrokVideoStatusKind(raw string) grokVideoStatusKind {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "pending", "queued", "processing", "running", "in_progress", "inprogress", "created", "submitted":
+		return grokVideoStatusPending
+	case "done", "completed", "complete", "succeeded", "success", "finished":
+		return grokVideoStatusDone
+	case "failed", "failure", "error", "cancelled", "canceled":
+		return grokVideoStatusFailed
+	case "expired", "timeout", "timed_out", "timedout":
+		return grokVideoStatusExpired
+	default:
+		return grokVideoStatusUnknown
 	}
-	if !isOfficialGrokVideoStatusDone(statusBody) {
+}
+
+// grokVideoStatusKindFromBody 读取状态体的 status 字段并归一化。
+func grokVideoStatusKindFromBody(statusBody []byte) grokVideoStatusKind {
+	if len(statusBody) == 0 || !gjson.ValidBytes(statusBody) {
+		return grokVideoStatusUnknown
+	}
+	return normalizeGrokVideoStatusKind(gjson.GetBytes(statusBody, "status").String())
+}
+
+// IsGrokVideoStatusBillable 只认「成功态 + 有可下载 video.url」。
+// pending / expired / failed，以及成功态但缺 video.url，都不计费。
+func IsGrokVideoStatusBillable(statusBody []byte) bool {
+	if grokVideoStatusKindFromBody(statusBody) != grokVideoStatusDone {
 		return false
 	}
 	return strings.TrimSpace(gjson.GetBytes(statusBody, "video.url").String()) != ""
 }
 
 func isOfficialGrokVideoStatusDone(statusBody []byte) bool {
-	// Official enum: pending | done | expired | failed.
-	return strings.EqualFold(strings.TrimSpace(gjson.GetBytes(statusBody, "status").String()), "done")
+	return grokVideoStatusKindFromBody(statusBody) == grokVideoStatusDone
 }
 
 // ExtractGrokVideoBillingFromStatusBody builds usage units from an official done status.
@@ -1876,6 +1915,9 @@ func writeGrokMediaResponse(c *gin.Context, resp *http.Response, body []byte, fi
 	if c == nil || resp == nil {
 		return
 	}
+	// Grok 媒体接口对额度不足也回 200 + error 体，直通会把上游额度原文（含可能
+	// 存在的密钥片段）泄露给客户端，这里与其它直通路径一致先装财务错误护栏。
+	defer GuardUpstreamFinancialError(c, resp.StatusCode, body)()
 	writeOpenAIPassthroughResponseHeaders(c.Writer.Header(), resp.Header, filter)
 	contentType := strings.TrimSpace(resp.Header.Get("Content-Type"))
 	if contentType == "" {

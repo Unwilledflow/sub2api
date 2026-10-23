@@ -333,6 +333,86 @@ func TestMediaBillingNotificationsUseCurrentPreferencesAndFrozenRate(t *testing.
 	require.NotContains(t, string(payload), "billing@example.test", "notification lookup must not enrich the stored intent")
 }
 
+// 中转站回的 status 是 completed（不是官方 done）时，轮询必须正常结算，
+// 而不是落进 default 分支报 unrecognized 后按分钟永久重试。
+func TestGrokVideoRecoverySettlesCompatCompletedStatus(t *testing.T) {
+	svc, repo, input, pending := newMediaBillingServiceTest(t)
+	ctx := context.Background()
+	job, err := svc.CreateGrokVideoBillingJob(ctx, input, pending)
+	require.NoError(t, err)
+	require.NoError(t, svc.SubmitGrokVideoBillingJob(ctx, job, "task_compat", pending))
+	upstream := &httpUpstreamRecorder{responses: []*http.Response{{StatusCode: http.StatusOK,
+		Header: http.Header{"Content-Type": {"application/json"}},
+		Body:   io.NopCloser(strings.NewReader(`{"status":"completed","model":"grok-imagine-video","video":{"url":"https://relay.test/v.mp4","duration":6}}`))}}}
+	account := newOpenAIRejectedFieldTestAccount()
+	account.ID = input.Account.ID
+	account.Platform = PlatformGrok
+	svc.accountRepo, svc.httpUpstream = mediaAccountRepo{account: account}, upstream
+
+	svc.recoverMediaBillingJobs(ctx)
+
+	stored, err := repo.GetMediaBillingJobByID(ctx, job.ID)
+	require.NoError(t, err)
+	require.Equal(t, MediaBillingDone, stored.Status, "compat completed status must settle the job")
+	require.Equal(t, 1, repo.applied)
+}
+
+// 上游回了无法归类的新状态：错误信息必须带上实际值，否则线上只能看到
+// 「unrecognized」却不知道上游到底回了什么。
+func TestGrokVideoRecoveryReportsObservedUnknownStatus(t *testing.T) {
+	svc, repo, input, pending := newMediaBillingServiceTest(t)
+	ctx := context.Background()
+	job, err := svc.CreateGrokVideoBillingJob(ctx, input, pending)
+	require.NoError(t, err)
+	require.NoError(t, svc.SubmitGrokVideoBillingJob(ctx, job, "task_weird", pending))
+	upstream := &httpUpstreamRecorder{responses: []*http.Response{{StatusCode: http.StatusOK,
+		Header: http.Header{"Content-Type": {"application/json"}},
+		Body:   io.NopCloser(strings.NewReader(`{"status":"quarantined"}`))}}}
+	account := newOpenAIRejectedFieldTestAccount()
+	account.ID = input.Account.ID
+	account.Platform = PlatformGrok
+	svc.accountRepo, svc.httpUpstream = mediaAccountRepo{account: account}, upstream
+
+	stored, err := repo.GetMediaBillingJobByID(ctx, job.ID)
+	require.NoError(t, err)
+	err = svc.pollGrokVideoBillingJob(ctx, stored)
+	require.ErrorContains(t, err, `unrecognized video task state: status="quarantined"`)
+}
+
+// 超过 TTL 的任务必须终止并按失败释放预留额，不能永久轮询。
+func TestGrokVideoRecoveryExpiresStaleJobAndRefunds(t *testing.T) {
+	svc, repo, input, pending := newMediaBillingServiceTest(t)
+	ctx := context.Background()
+	job, err := svc.CreateGrokVideoBillingJob(ctx, input, pending)
+	require.NoError(t, err)
+	require.NoError(t, svc.SubmitGrokVideoBillingJob(ctx, job, "task_stale", pending))
+	require.InDelta(t, 100-3.6, repo.balance, 1e-8)
+	repo.mu.Lock()
+	repo.jobs[job.ID].CreatedAt = time.Now().Add(-mediaBillingVideoJobTTL - time.Minute)
+	repo.mu.Unlock()
+
+	svc.recoverMediaBillingJobs(ctx)
+
+	stored, err := repo.GetMediaBillingJobByID(ctx, job.ID)
+	require.NoError(t, err)
+	require.Equal(t, MediaBillingFailed, stored.Status)
+	require.InDelta(t, 100, repo.balance, 1e-8, "expired job must release the reservation")
+	require.Equal(t, 0, repo.applied)
+}
+
+func TestMediaBillingJobStaleThresholds(t *testing.T) {
+	now := time.Now()
+	require.False(t, func() bool { stale, _ := mediaBillingJobStale(&MediaBillingJob{CreatedAt: now}, now); return stale }())
+	stale, reason := mediaBillingJobStale(&MediaBillingJob{CreatedAt: now.Add(-mediaBillingVideoJobTTL)}, now)
+	require.True(t, stale)
+	require.Contains(t, reason, "age=")
+	stale, reason = mediaBillingJobStale(&MediaBillingJob{CreatedAt: now, Attempts: mediaBillingVideoJobMaxAttempts}, now)
+	require.True(t, stale)
+	require.Contains(t, reason, "attempts=")
+	stale, _ = mediaBillingJobStale(nil, now)
+	require.False(t, stale)
+}
+
 func TestMediaBillingNotificationLookupFailureDoesNotChangeCharge(t *testing.T) {
 	svc, _, _, _ := newMediaBillingServiceTest(t)
 	svc.balanceNotifyService, _ = newBalanceNotifyServiceForTest()

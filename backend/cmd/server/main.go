@@ -22,6 +22,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/repository"
 	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
+	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/Wei-Shaw/sub2api/internal/setup"
 	"github.com/Wei-Shaw/sub2api/internal/web"
 
@@ -206,6 +207,10 @@ func runMainServer() {
 	if cfg.RunMode == config.RunModeSimple {
 		log.Println("⚠️  WARNING: Running in SIMPLE mode - billing and quota checks are DISABLED")
 	}
+
+	// SMTP 出站私网放行与上游 URL 校验共用同一个开关，避免出现
+	// 「上游允许私网、邮件服务却是内网地址因而永远发不出去」的割裂配置。
+	service.SetSMTPAllowPrivateTargets(cfg.Security.URLAllowlist.AllowPrivateHosts)
 
 	buildInfo := handler.BuildInfo{
 		Version:   Version,

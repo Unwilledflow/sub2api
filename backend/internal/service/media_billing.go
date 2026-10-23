@@ -460,6 +460,13 @@ func (s *OpenAIGatewayService) recoverMediaBillingJobs(ctx context.Context) {
 			if ctx.Err() != nil {
 				return
 			}
+			// 超龄只在轮询类任务（无冻结快照）上判定：这类任务的预留额由
+			// FailMediaBillingJob 释放，语义明确；带 Intent 的任务走结算路径，
+			// 不在这里动，避免把「已冻结待入账」的单子误判为失败。
+			stale, staleReason := false, ""
+			if job.Intent == nil {
+				stale, staleReason = mediaBillingJobStale(job, time.Now())
+			}
 			workCtx, stop := context.WithTimeout(ctx, 30*time.Second)
 			if job.Intent != nil {
 				err = s.settleMediaBillingJob(workCtx, job, nil)
@@ -467,8 +474,30 @@ func (s *OpenAIGatewayService) recoverMediaBillingJobs(ctx context.Context) {
 				err = s.pollGrokVideoBillingJob(workCtx, job)
 			}
 			stop()
-			if err != nil {
-				logger.L().Warn("media_billing.retry", zap.String("job_id", job.ID), zap.Error(err))
+			if err != nil && !stale {
+				logger.L().Warn("media_billing.retry",
+					zap.String("job_id", job.ID),
+					zap.String("kind", job.Kind),
+					zap.Int("attempts", job.Attempts+1),
+					zap.Duration("age", time.Since(job.CreatedAt)),
+					zap.Error(err))
+			}
+			if stale {
+				// 超龄任务先给最后一次结算机会（上游可能刚刚出片、只是状态别名
+				// 先前没被识别），仍未结算才终止并释放预留额。
+				if !s.mediaBillingJobSettled(ctx, job.ID) {
+					logger.L().Warn("media_billing.expired",
+						zap.String("job_id", job.ID),
+						zap.String("kind", job.Kind),
+						zap.String("reason", staleReason),
+						zap.Int("attempts", job.Attempts+1),
+						zap.Float64("reserved_amount", job.ReservedAmount),
+						zap.String("upstream_task_id", job.UpstreamTaskID))
+					if failErr := s.FailGrokVideoBillingJob(ctx, job); failErr != nil {
+						logger.L().Error("media_billing.expire_failed", zap.String("job_id", job.ID), zap.Error(failErr))
+					}
+				}
+				continue
 			}
 			retryCtx, retryCancel := context.WithTimeout(ctx, 3*time.Second)
 			delay := 15 * time.Second
@@ -524,14 +553,62 @@ func (s *OpenAIGatewayService) pollGrokVideoBillingJob(ctx context.Context, job 
 	if json.Unmarshal(writer.body, &body) != nil {
 		return errors.New("invalid video status response")
 	}
-	switch strings.ToLower(body.Status) {
-	case "failed", "cancelled", "canceled":
+	switch normalizeGrokVideoStatusKind(body.Status) {
+	case grokVideoStatusFailed:
 		return s.FailGrokVideoBillingJob(ctx, job)
-	case "expired":
-		return errors.New("expired video requires billing reconciliation")
-	case "pending", "processing", "running", "queued", "in_progress", "":
+	case grokVideoStatusExpired:
+		// 上游明确过期：没有可计费产物，释放预留额；继续轮询只会白烧配额。
+		if err := s.FailGrokVideoBillingJob(ctx, job); err != nil {
+			return err
+		}
+		return fmt.Errorf("video task expired upstream: status=%q", body.Status)
+	case grokVideoStatusPending:
+		return nil
+	case grokVideoStatusDone:
+		// 成功态但上游还没给出 video.url（中转站偶发的中转窗口）：继续等，
+		// 不是错误，交给下面的 TTL 兜底。
 		return nil
 	default:
-		return fmt.Errorf("unrecognized video task state")
+		// 带上实际观测值，否则线上只能看到「unrecognized」却不知道上游回了什么。
+		return fmt.Errorf("unrecognized video task state: status=%q", body.Status)
 	}
+}
+
+// 视频任务轮询上限：xAI 视频正常几分钟出结果，超过 6 小时或 4000 次轮询仍
+// 未拿到可计费产物，说明上游状态已经无法对账。没有这个上限时任务会按分钟
+// 永久重试（实测两个任务各 5500+ 次、卡 4.5 天，持续冻结用户预留额并刷日志）。
+const (
+	mediaBillingVideoJobTTL         = 6 * time.Hour
+	mediaBillingVideoJobMaxAttempts = 4000
+)
+
+// mediaBillingJobSettled 读库确认任务是否已离开 submitted 态（结算或失败）。
+// 读不到时按「未结算」处理，宁可走终止也不留在无限轮询里。
+func (s *OpenAIGatewayService) mediaBillingJobSettled(ctx context.Context, id string) bool {
+	if s == nil || s.mediaBillingJobs == nil {
+		return false
+	}
+	readCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	job, err := s.mediaBillingJobs.GetMediaBillingJobByID(readCtx, id)
+	if err != nil || job == nil {
+		return false
+	}
+	return job.Status != MediaBillingSubmitted && job.Status != MediaBillingCreating
+}
+
+// mediaBillingJobStale 判定一次轮询任务是否应当终止并按失败释放预留额。
+func mediaBillingJobStale(job *MediaBillingJob, now time.Time) (bool, string) {
+	if job == nil {
+		return false, ""
+	}
+	if job.Attempts >= mediaBillingVideoJobMaxAttempts {
+		return true, fmt.Sprintf("attempts=%d", job.Attempts)
+	}
+	if !job.CreatedAt.IsZero() {
+		if age := now.Sub(job.CreatedAt); age >= mediaBillingVideoJobTTL {
+			return true, fmt.Sprintf("age=%s", age.Truncate(time.Minute))
+		}
+	}
+	return false, ""
 }

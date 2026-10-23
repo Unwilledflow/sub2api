@@ -195,14 +195,24 @@ var ErrSMTPTargetBlocked = errors.New("smtp target blocked by outbound policy")
 // errSMTPSecurityBlocked 保留包内短名，内部判定用。
 var errSMTPSecurityBlocked = ErrSMTPTargetBlocked
 
-// smtpAllowPrivateTargets 只由测试打开（见 SetSMTPAllowPrivateTargetsForTest）。
-// 生产恒为 false：SMTP 测试/发信必须走公网主机，否则等于给了一个
-// 任意 host:port 的 TCP 探测原语。
+// smtpAllowPrivateTargets 放行私网/环回 SMTP 目标。
+//
+// 默认关闭：SMTP 测试/发信不能变成任意 host:port 的 TCP 探测原语。
+// 生产由启动流程按 security.url_allowlist.allow_private_hosts 注入（见
+// SetSMTPAllowPrivateTargets）——应用已经在用这个开关决定「上游是否允许私网」，
+// SMTP 若单独写死 false，就会出现「上游可以连私网、邮件却永远发不出去」的
+// 割裂（实测：mail.baiyuan.cc.cd 在内网解析到 maddy 容器的 172.19.0.9:587，
+// 充值成功通知全部被拦）。
 var smtpAllowPrivateTargets atomic.Bool
+
+// SetSMTPAllowPrivateTargets 由启动流程按配置注入私网放行策略。
+func SetSMTPAllowPrivateTargets(allow bool) {
+	smtpAllowPrivateTargets.Store(allow)
+}
 
 // SetSMTPAllowPrivateTargetsForTest 仅供单元测试放行 127.0.0.1 上的假 SMTP 服务器。
 func SetSMTPAllowPrivateTargetsForTest(allow bool) {
-	smtpAllowPrivateTargets.Store(allow)
+	SetSMTPAllowPrivateTargets(allow)
 }
 
 // SendEmailWithConfig 使用指定配置发送邮件

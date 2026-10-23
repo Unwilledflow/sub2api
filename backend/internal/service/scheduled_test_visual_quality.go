@@ -275,7 +275,7 @@ func renderScheduledVisualFrames(ctx context.Context, document string) ([]schedu
 	}
 	script := strings.TrimSpace(os.Getenv("SUB2API_QUALITY_RENDERER_SCRIPT"))
 	if script == "" || !filepath.IsAbs(script) {
-		return nil, errors.New("renderer not configured")
+		return nil, errScheduledVisualRendererNotConfigured
 	}
 	runner := strings.TrimSpace(os.Getenv("SUB2API_QUALITY_RENDERER_NODE"))
 	if runner == "" {
@@ -290,7 +290,7 @@ func renderScheduledVisualFramesContainer(ctx context.Context, document string) 
 	}
 	script := strings.TrimSpace(os.Getenv("SUB2API_QUALITY_RENDERER_JS_SCRIPT"))
 	if script == "" || !filepath.IsAbs(script) {
-		return nil, errors.New("container renderer not configured")
+		return nil, errScheduledVisualRendererNotConfigured
 	}
 	runner := strings.TrimSpace(os.Getenv("SUB2API_QUALITY_RENDERER_JS_RUNNER"))
 	if runner == "" {
@@ -307,6 +307,11 @@ func renderScheduledVisualFramesContainer(ctx context.Context, document string) 
 	return runScheduledRenderer(ctx, runner, script, document)
 }
 
+// errScheduledVisualRendererNotConfigured 表示两个渲染器都没有配置。
+// 这是「功能未启用」而不是「渲染失败」，调用方会静默退回本地评审，
+// 因此不能按 ERROR 打日志（历史上每次计划跑都刷一条 both renderers failed）。
+var errScheduledVisualRendererNotConfigured = errors.New("scheduled visual renderer not configured")
+
 func renderScheduledVisualFramesWithFallback(ctx context.Context, document string) ([]scheduledVisualFrame, error) {
 	frames, inProcessErr := renderScheduledVisualFrames(ctx, document)
 	if inProcessErr == nil {
@@ -317,9 +322,19 @@ func renderScheduledVisualFramesWithFallback(ctx context.Context, document strin
 		logger.LegacyPrintf("service.quality", "visual review: in-process renderer failed (%v), container renderer succeeded", inProcessErr)
 		return frames, nil
 	}
+	if errors.Is(inProcessErr, errScheduledVisualRendererNotConfigured) && errors.Is(containerErr, errScheduledVisualRendererNotConfigured) {
+		scheduledVisualRendererAbsentOnce.Do(func() {
+			logger.LegacyPrintf("service.quality",
+				"visual review disabled: no renderer configured (set SUB2API_QUALITY_RENDERER_JS_SCRIPT); falling back to local quality evaluation")
+		})
+		return nil, errScheduledVisualRendererNotConfigured
+	}
 	logger.LegacyPrintf("service.quality", "visual review: both renderers failed: in-process=%v; container=%v", inProcessErr, containerErr)
 	return nil, containerErr
 }
+
+// scheduledVisualRendererAbsentOnce 保证「渲染器未配置」只提示一次，不随计划执行反复刷屏。
+var scheduledVisualRendererAbsentOnce sync.Once
 
 func (s *AccountTestService) assessScheduledVisualQuality(ctx context.Context, plan *ScheduledTestPlan, document string) (string, string) {
 	if !isDefaultScheduledTestPrompt(plan.PromptText) {

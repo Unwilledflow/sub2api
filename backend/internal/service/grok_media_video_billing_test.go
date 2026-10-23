@@ -81,8 +81,15 @@ func TestIsGrokVideoStatusBillable(t *testing.T) {
 	// URL alone (legacy/non-official shapes) is not enough
 	require.False(t, IsGrokVideoStatusBillable([]byte(`{"url":"https://example.com/v.mp4"}`)))
 	require.False(t, IsGrokVideoStatusBillable([]byte(`{"download_url":"/v1/videos/task/content"}`)))
-	// "completed" is not the official enum value
-	require.False(t, IsGrokVideoStatusBillable([]byte(`{"status":"completed","video":{"url":"https://vidgen.x.ai/x.mp4"}}`)))
+	// 兼容站常见成功别名同样要计费。历史上这里断言 completed 不计费，正是
+	// 「客户端看到 completed、计费只认 done」的漂移来源：中转站直接回 completed
+	// 时任务永久卡在 submitted 无限轮询。adaptGrokVideoClientResponse 本就把
+	// done 改写成 completed 给客户端，两处判定必须一致。
+	require.True(t, IsGrokVideoStatusBillable([]byte(`{"status":"completed","video":{"url":"https://vidgen.x.ai/x.mp4"}}`)))
+	require.True(t, IsGrokVideoStatusBillable([]byte(`{"status":"succeeded","video":{"url":"https://vidgen.x.ai/x.mp4"}}`)))
+	require.True(t, IsGrokVideoStatusBillable([]byte(`{"status":"SUCCESS","video":{"url":"https://vidgen.x.ai/x.mp4"}}`)))
+	// 成功别名但缺少可下载 URL 仍不计费。
+	require.False(t, IsGrokVideoStatusBillable([]byte(`{"status":"completed"}`)))
 }
 
 func TestExtractGrokVideoBillingFromStatusBodyPrefersUpstreamParams(t *testing.T) {
@@ -129,7 +136,7 @@ func TestExtractGrokVideoBillingFromStatusBodyFallsBackToPending(t *testing.T) {
 	require.Equal(t, 10, result.VideoDurationSeconds)
 }
 
-func TestExtractGrokVideoBillingRejectsNonDoneStatus(t *testing.T) {
+func TestExtractGrokVideoBillingRejectsPendingStatus(t *testing.T) {
 	t.Parallel()
 	pending := &GrokVideoPendingBilling{Model: "m", VideoDurationSeconds: 8, VideoResolution: "720p"}
 	require.Nil(t, ExtractGrokVideoBillingFromStatusBody(
@@ -137,6 +144,11 @@ func TestExtractGrokVideoBillingRejectsNonDoneStatus(t *testing.T) {
 		pending, "req",
 	))
 	require.Nil(t, ExtractGrokVideoBillingFromStatusBody(
+		[]byte(`{"status":"failed","video":{"url":"https://vidgen.x.ai/x.mp4","duration":8}}`),
+		pending, "req",
+	))
+	// 兼容站成功别名要能计费，否则任务拿不到 VideoCount、永远结算不了。
+	require.NotNil(t, ExtractGrokVideoBillingFromStatusBody(
 		[]byte(`{"status":"completed","video":{"url":"https://vidgen.x.ai/x.mp4","duration":8}}`),
 		pending, "req",
 	))
@@ -171,11 +183,20 @@ func TestGrokMediaUsageFromResponseVideoStatusBillsOnOfficialDone(t *testing.T) 
 	)
 	require.Equal(t, 0, pendingOnly.VideoCount)
 
-	// completed is not official done.
+	// 兼容站成功别名 completed 等同于官方 done，必须计入可计费单位。
 	completed := grokMediaUsageFromResponse(
 		GrokMediaEndpointVideoStatus,
 		GrokMediaRequestInfo{},
 		[]byte(`{"status":"completed","video":{"url":"https://vidgen.x.ai/a.mp4","duration":9}}`),
 	)
-	require.Equal(t, 0, completed.VideoCount)
+	require.Equal(t, 1, completed.VideoCount)
+	require.Equal(t, 9, completed.VideoDurationSeconds)
+
+	// 成功态但缺 video.url → 不可计费，仍为 0。
+	completedNoURL := grokMediaUsageFromResponse(
+		GrokMediaEndpointVideoStatus,
+		GrokMediaRequestInfo{},
+		[]byte(`{"status":"completed"}`),
+	)
+	require.Equal(t, 0, completedNoURL.VideoCount)
 }

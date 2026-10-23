@@ -3,8 +3,10 @@ package service
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"strings"
 
+	"github.com/cespare/xxhash/v2"
 	"github.com/tidwall/gjson"
 )
 
@@ -18,10 +20,17 @@ const contentStablePrefixSessionSeedPrefix = "compat_csp_"
 
 // deriveOpenAIContentSessionSeed builds a stable session seed from an
 // OpenAI-format request body. Only fields constant across conversation turns
-// are included: model, tools/functions definitions, the leading system/developer
-// prompt prefix in Chat messages, instructions (Responses API), and the first
-// user message.
+// are included: model, tools/functions definitions, the system/developer prompt
+// prefix in Chat messages, instructions (Responses API), and the first user
+// message.
 // Supports both Chat Completions (messages) and Responses API (input).
+//
+// 追加的「最近复用周期」是无会话头链路的关键：此前只取“第一条 user 消息 /
+// 第一个 input_text”，而 DSH 这类客户端每轮第一条 input 都是易变的运行时上下文
+// （时间戳、动态注入），文件名还随每步工具调用变化 → 每轮种子不同 → 每轮重新
+// 负载均衡 → 上游前缀缓存整段未命中。改为对全部 user/input_text 做 xxhash 后
+// 取最近 (非最旧) 的 8 个 raw，输入只含此前任意轮次 id 时即可复现同一周期，从而
+// 跨轮稳定；工具调用产生的变动 content 只影响同一请求内，不影响周期身份。
 func deriveOpenAIContentSessionSeed(body []byte) string {
 	if len(body) == 0 {
 		return ""
@@ -114,32 +123,21 @@ scanRoot:
 		_, _ = b.WriteString(instr)
 	}
 
-	firstUserCaptured := false
+	// 每个请求的 role 前缀只允许出现一次：Responses 的 input 每轮都会追加同类消息，
+	// 重复写入会让前缀身份漂移。
+	roleEmitted := make(map[string]struct{}, 2)
 
 	msgs := fields[messagesField]
 	if msgs.Exists() && msgs.IsArray() {
-		systemPrefixOpen := true
+		// Chat Completions：保留旧语义，只看前导 system/developer 前缀。同角色只取
+		// 第一次出现，用户输入取最近复用周期。
+		firstUserCaptured := false
 		msgs.ForEach(func(_, msg gjson.Result) bool {
-			role := msg.Get("role").String()
-			switch role {
+			switch role := msg.Get("role").String(); role {
 			case "system", "developer":
-				if systemPrefixOpen {
-					_, _ = b.WriteString("|system=")
-					if c := msg.Get("content"); c.Exists() {
-						_, _ = b.WriteString(normalizeCompatSeedJSON(json.RawMessage(c.Raw)))
-					}
-				}
+				appendContentSeedPrefix(&b, roleEmitted, role, msg)
 			case "user":
-				systemPrefixOpen = false
-				if !firstUserCaptured {
-					_, _ = b.WriteString("|first_user=")
-					if c := msg.Get("content"); c.Exists() {
-						_, _ = b.WriteString(normalizeCompatSeedJSON(json.RawMessage(c.Raw)))
-					}
-					firstUserCaptured = true
-				}
-			default:
-				systemPrefixOpen = false
+				captureResponsesUserAnchor(&b, &firstUserCaptured, msg.Get("content"))
 			}
 			return true
 		})
@@ -148,39 +146,202 @@ scanRoot:
 			_, _ = b.WriteString("|input=")
 			_, _ = b.WriteString(inp.String())
 		} else if inp.IsArray() {
-			inp.ForEach(func(_, item gjson.Result) bool {
-				role := item.Get("role").String()
-				switch role {
-				case "system", "developer":
-					_, _ = b.WriteString("|system=")
-					if c := item.Get("content"); c.Exists() {
-						_, _ = b.WriteString(normalizeCompatSeedJSON(json.RawMessage(c.Raw)))
-					}
-				case "user":
-					if !firstUserCaptured {
-						_, _ = b.WriteString("|first_user=")
-						if c := item.Get("content"); c.Exists() {
-							_, _ = b.WriteString(normalizeCompatSeedJSON(json.RawMessage(c.Raw)))
-						}
-						firstUserCaptured = true
+			leading, history, turns := splitResponsesContentSeedItems(inp.Array())
+			// 前缀槽位只在「没有历史轮次」的开局请求里写。有历史时，客户端（如 DSH）
+			// 每轮都会把一条易变的运行时上下文 developer 放在首位；写进种子就等于
+			// 每轮换一个会话身份 → 每轮重新负载均衡（生产实测 65% 相邻请求换账号）。
+			// 开局请求里的首个 system/developer 才是真正固定的前缀。
+			if len(history) == 0 {
+				for _, item := range leading {
+					switch role := item.Get("role").String(); role {
+					case "system", "developer":
+						appendContentSeedPrefix(&b, roleEmitted, role, item)
 					}
 				}
-				if !firstUserCaptured && item.Get("type").String() == "input_text" {
-					_, _ = b.WriteString("|first_user=")
-					if text := item.Get("text").String(); text != "" {
-						_, _ = b.WriteString(text)
-					}
-					firstUserCaptured = true
-				}
-				return true
-			})
+			}
+			firstUserCaptured := false
+			for _, item := range leading {
+				captureResponsesSeedAnchor(&b, &firstUserCaptured, item)
+			}
+			for _, item := range history {
+				captureResponsesSeedAnchor(&b, &firstUserCaptured, item)
+			}
+			for _, item := range turns {
+				captureResponsesSeedAnchor(&b, &firstUserCaptured, item)
+			}
 		}
 	}
-
 	if b.Len() == 0 {
 		return ""
 	}
 	return contentSessionSeedPrefix + b.String()
+}
+
+// contentSeedReusableTurnHashes 是参与种子计算的“最近复用周期”数量：固定 N 后
+// 同一对话的第 t 轮与第 t+1 轮只要都包含其中任意一轮的用户输入，种子即相同。
+const contentSeedReusableTurnHashes = 8
+
+// appendContentSeedPrefix 写入<角色>="内容"前缀对：每个角色最多一次，避免每轮追加
+// 的同类消息让前缀身份漂移。
+func appendContentSeedPrefix(b *strings.Builder, roleEmitted map[string]struct{}, role string, item gjson.Result) {
+	if _, done := roleEmitted[role]; done {
+		return
+	}
+	content := item.Get("content")
+	if !content.Exists() || content.Type == gjson.Null {
+		return
+	}
+	if content.Type != gjson.String && !content.IsArray() && !content.IsObject() {
+		return
+	}
+	normalized := normalizeCompatSeedJSON(json.RawMessage(content.Raw))
+	if strings.TrimSpace(normalized) == "" {
+		return
+	}
+	roleEmitted[role] = struct{}{}
+	_, _ = b.WriteString("|" + role + "=")
+	_, _ = b.WriteString(normalized)
+}
+
+// stableUserTurnAnchor 返回随轮次稳定、对 DSH 这类客户端不漂移的会话锚点：
+// 全部用户输入 raw 的哈希，按出现顺序取最近 contentSeedReusableTurnHashes 个。
+// 只看 raw 哈希、不裁剪，请求只含此前轮次输入时结果与旧实现一致；没有任何用户
+// 输入时返回空串，由 model/system/tools 兜底，避免退化成空种子。
+func stableUserTurnAnchor(content gjson.Result) string {
+	turnHashes := reusableTurnContentHashes(content)
+	if len(turnHashes) == 0 {
+		return ""
+	}
+	start := len(turnHashes) - contentSeedReusableTurnHashes
+	if start < 0 {
+		start = 0
+	}
+	var b strings.Builder
+	for _, h := range turnHashes[start:] {
+		b.WriteString(h)
+		b.WriteString(",")
+	}
+	return b.String()
+}
+
+// reusableTurnContentHashes 返回本轮请求中属于“可跨轮复用”的用户输入哈希：
+// 字符串正文与数组里 input_text/text 项，按出现顺序。助手输出与工具结果不参与。
+func reusableTurnContentHashes(content gjson.Result) []string {
+	if !content.Exists() || content.Type == gjson.Null {
+		return nil
+	}
+	hashes := make([]string, 0, 4)
+	appendText := func(text string) {
+		if text != "" {
+			hashes = append(hashes, fmt.Sprintf("%016x", xxhash.Sum64String(text)))
+		}
+	}
+	if content.Type == gjson.String || !content.IsArray() {
+		appendText(content.String())
+		return hashes
+	}
+	content.ForEach(func(_, item gjson.Result) bool {
+		switch {
+		case item.Type == gjson.String:
+			appendText(item.String())
+		case isReusableUserTextItem(item):
+			appendText(item.Get("text").String())
+		}
+		return true
+	})
+	return hashes
+}
+
+// isReusableUserTextItem 判断一个内容项是不是用户输入文本。
+// 助手输出（output_text）与图片等其它项不构成用户锚点，否则「只有助手输出」
+// 的请求也会拿到一个锚点，退化成伪会话身份。
+func isReusableUserTextItem(item gjson.Result) bool {
+	text := item.Get("text")
+	if text.Type != gjson.String || text.String() == "" {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(item.Get("type").String())) {
+	case "", "input_text", "text":
+		return true
+	default:
+		return false
+	}
+}
+
+// splitResponsesContentSeedItems 把 Responses 的 input 切成三段，让种子不随轮次漂移：
+//
+//	leading  固定前导 system/developer 前缀（并含没有消息角色的顶层 input_text）
+//	history  历史轮次（除最后一轮 user 之外的全部消息）
+//	turns    最后连续的一轮或多轮 user 消息
+//
+// 历史里的 developer/user 只作为“用户锚点”输入（走最近复用周期），不参与前缀槽位，
+// 因此 DSH 每轮追加一条 developer 运行时上下文时，前缀身份保持不变。
+func splitResponsesContentSeedItems(items []gjson.Result) (leading, history, turns []gjson.Result) {
+	leading = make([]gjson.Result, 0, 2)
+	history = make([]gjson.Result, 0, len(items))
+	turns = make([]gjson.Result, 0, 2)
+
+	seenNonPrefix := false
+	lastUser := -1
+	for i, item := range items {
+		role := item.Get("role").String()
+		if role == "user" {
+			lastUser = i
+		}
+	}
+	// 最后一段连续 user（工具结果之后的一轮可能有多条 user 消息）属于本轮。
+	lastRunStart := lastUser
+	for lastRunStart > 0 && items[lastRunStart-1].Get("role").String() == "user" {
+		lastRunStart--
+	}
+
+	for i, item := range items {
+		role := item.Get("role").String()
+		if !seenNonPrefix {
+			switch role {
+			case "":
+				leading = append(leading, item)
+				continue
+			case "system", "developer":
+				leading = append(leading, item)
+				continue
+			}
+			seenNonPrefix = true
+		}
+		if lastUser >= 0 && i >= lastRunStart {
+			turns = append(turns, item)
+			continue
+		}
+		history = append(history, item)
+	}
+	return leading, history, turns
+}
+
+// captureResponsesSeedAnchor 从一条 Responses input 项里取用户锚点：
+// 带 role=user 的消息取其 content；没有消息角色的顶层 input_text 直接取 text
+// （官方 Responses 风格）。后者曾经被漏掉，导致「只有 input_text 的请求」退化成
+// 只按模型区分，独立提问撞进同一个会话身份。
+func captureResponsesSeedAnchor(b *strings.Builder, captured *bool, item gjson.Result) {
+	switch role := strings.TrimSpace(item.Get("role").String()); role {
+	case "user":
+		captureResponsesUserAnchor(b, captured, item.Get("content"))
+	case "":
+		if strings.EqualFold(strings.TrimSpace(item.Get("type").String()), "input_text") {
+			captureResponsesUserAnchor(b, captured, item.Get("text"))
+		}
+	}
+}
+
+// captureResponsesUserAnchor 记录首个用户输入锚点（跨轮稳定的最近复用周期哈希）。
+func captureResponsesUserAnchor(b *strings.Builder, captured *bool, content gjson.Result) {
+	if *captured {
+		return
+	}
+	*captured = true
+	if anchor := stableUserTurnAnchor(content); anchor != "" {
+		_, _ = b.WriteString("|first_user=")
+		_, _ = b.WriteString(anchor)
+	}
 }
 
 // deriveOpenAIAnchoredContentSessionSeed returns the legacy content-derived
