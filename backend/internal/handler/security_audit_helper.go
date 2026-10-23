@@ -92,6 +92,7 @@ func runSecurityAudit(c *gin.Context, reqLog *zap.Logger, coordinator *securitya
 		if decision.AllowNextStage && cacheCompletion {
 			c.Set(securityAuditCompletedContextKey, true)
 		}
+		markContentPolicyBlock(c, &decision)
 		return &decision
 	}
 	request := buildSecurityAuditRequest(c, apiKey, subject, protocol, model, body, stage)
@@ -103,6 +104,7 @@ func runSecurityAudit(c *gin.Context, reqLog *zap.Logger, coordinator *securitya
 					entry.stage == request.Stage && entry.turn == turnNo && entry.bodyHash == bodyHash {
 					decision := entry.decision
 					logSecurityAuditDone(reqLog, request, decision, true)
+					markContentPolicyBlock(c, &decision)
 					return &decision
 				}
 			}
@@ -114,6 +116,7 @@ func runSecurityAudit(c *gin.Context, reqLog *zap.Logger, coordinator *securitya
 				})
 			}
 			logSecurityAuditDone(reqLog, request, decision, false)
+			markContentPolicyBlock(c, &decision)
 			return &decision
 		}
 	}
@@ -123,7 +126,18 @@ func runSecurityAudit(c *gin.Context, reqLog *zap.Logger, coordinator *securitya
 		c.Set(securityAuditCompletedContextKey, true)
 	}
 	logSecurityAuditDone(reqLog, request, decision, false)
+	markContentPolicyBlock(c, &decision)
 	return &decision
+}
+
+// markContentPolicyBlock records that the request was rejected by the local
+// content audit before any upstream dispatch. Ops must then attribute the 403
+// to the client request instead of guessing internal/platform from the body.
+func markContentPolicyBlock(c *gin.Context, decision *securityaudit.Decision) {
+	if c == nil || decision == nil || decision.AllowNextStage {
+		return
+	}
+	service.MarkOpsClientBusinessLimited(c, service.OpsClientBusinessLimitedReasonContentPolicy)
 }
 
 func logSecurityAuditStart(reqLog *zap.Logger, request securityaudit.Request, bodyBytes int, cached bool) {

@@ -1930,6 +1930,7 @@ func (h *OpenAIGatewayHandler) anthropicStreamingAwareError(c *gin.Context, stat
 		streamStarted = true
 	}
 	if streamStarted {
+		service.MarkOpsStreamError(c, errType, message, status)
 		flusher, ok := c.Writer.(http.Flusher)
 		if ok {
 			errPayload, _ := json.Marshal(gin.H{
@@ -3813,14 +3814,16 @@ func (h *OpenAIGatewayHandler) handleStreamingAwareErrorWithCode(
 		if countTowardsSLA {
 			service.MarkOpsStreamFailure(c, errType, code, message, status)
 		} else {
-			service.MarkOpsStreamError(c, errType, message, status)
+			service.MarkOpsStreamErrorValue(c, service.OpsStreamError{
+				ErrType: errType, Code: code, Message: message, IntendedStatus: status,
+			})
 		}
 		// /v1/responses 的严格 SDK（Codex CLI）要求终止事件必须属于
 		// response.completed/failed/incomplete/cancelled 集合。
 		// 通用 `event: error` 帧不被识别为终止事件，会导致
 		// "stream closed before response.completed"。
 		if inboundIsResponses(c) {
-			if writeResponsesFailedSSEWithCode(c, errType, "", message) {
+			if writeResponsesFailedSSEWithCode(c, errType, code, message) {
 				return
 			}
 		}

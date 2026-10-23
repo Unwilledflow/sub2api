@@ -2108,9 +2108,40 @@ func inferResponsesFailedOpsErrorType(code string) string {
 	}
 }
 
-func inferStreamFailureStatus(_ *gin.Context, parsed parsedOpsError) int {
+// markedResponderFrameCode 返回 response.failed 帧里 error.code 会落成的值：
+// 已定错误码优先，否则按 errType 映射。与 writeResponsesFailedSSEWithCode 保持一致。
+func markedResponderFrameCode(marked service.OpsStreamError) string {
+	if code := strings.TrimSpace(marked.Code); code != "" {
+		return code
+	}
+	return mapResponsesErrorCode(marked.ErrType)
+}
+
+func inferStreamFailureStatus(c *gin.Context, parsed parsedOpsError) int {
 	if parsed.StatusCode >= 400 && parsed.StatusCode <= 599 {
 		return parsed.StatusCode
+	}
+	// Synthetic SSE errors can carry only a protocol code (e.g. upstream_error),
+	// which cannot distinguish 500/502/503/504/529. Preserve the status already
+	// confirmed by the emitter, but only for the matching terminal error. Never
+	// infer the final result from a prior account attempt or WebSocket turn.
+	if marked, ok := service.GetOpsStreamError(c); ok && marked.Turn == 0 && !marked.NonStream &&
+		marked.IntendedStatus >= 400 && marked.IntendedStatus <= 599 &&
+		strings.TrimSpace(marked.Message) != "" && strings.TrimSpace(marked.Message) == strings.TrimSpace(parsed.Message) {
+		// 本分支不合成 status_code（response.failed 只带 code/message），所以按终端
+		// 帧的实际内容回推该标记是否会发出同样的帧：code 与 type 两个字段。
+		// responses 帧的 type 由 code 反推，SSE error 帧原样带 ErrType。
+		code := strings.TrimSpace(parsed.Code)
+		expectedType := inferResponsesFailedOpsErrorType(code)
+		if expectedType == "" {
+			expectedType = "upstream_error"
+		}
+		matchingResponses := inboundIsResponses(c) && code == markedResponderFrameCode(marked) &&
+			strings.TrimSpace(parsed.ErrorType) == expectedType
+		matchingSSE := strings.TrimSpace(parsed.ErrorType) == marked.ErrType && code == marked.Code
+		if matchingResponses || matchingSSE {
+			return marked.IntendedStatus
+		}
 	}
 	switch strings.TrimSpace(parsed.Code) {
 	case "rate_limit_exceeded":
@@ -2277,16 +2308,21 @@ func classifyOpsErrorLog(c *gin.Context, errType, message, code string, status i
 	routingCapacityLimited := isOpsRoutingCapacityLimited(c)
 	clientBusinessLimited := service.HasOpsClientBusinessLimited(c)
 	localModelConfiguration := clientBusinessLimited && service.OpsClientBusinessLimitedReason(c) == service.OpsClientBusinessLimitedReasonLocalModelConfiguration
+	// 本地内容审计（关键词/风控/cyber 策略）拒绝：请求内容导致的客户端侧结果，
+	// 既不是平台故障，也不属于鉴权问题，必须落 request/client。
+	contentPolicyBlocked := clientBusinessLimited && service.OpsClientBusinessLimitedReason(c) == service.OpsClientBusinessLimitedReasonContentPolicy
 	upstreamError := hasOpsUpstreamErrorContext(c)
 	accountAuthFailure := hasOpsAccountAuthFailure(c)
-	if localModelConfiguration {
+	if contentPolicyBlocked {
+		phase = "request"
+	} else if localModelConfiguration {
 		phase = "routing"
 	} else if accountAuthFailure && !routingCapacityLimited {
 		phase = "account_auth"
 	} else if upstreamError && !routingCapacityLimited {
 		phase = "upstream"
 	}
-	if clientBusinessLimited && !upstreamError && !routingCapacityLimited && !localModelConfiguration {
+	if clientBusinessLimited && !upstreamError && !routingCapacityLimited && !localModelConfiguration && !contentPolicyBlocked {
 		phase = "auth"
 	}
 	if routingCapacityLimited {
